@@ -114,13 +114,97 @@ PAPER_ANALYSIS_SIGNATURE = _signature_hash(
 
 PAIRWISE_ANALYSIS_SIGNATURE = _signature_hash(
     {
-        "version": "pairwise-analysis-v2",
+        "version": "pairwise-analysis-v3",
         "paper_analysis_signature": PAPER_ANALYSIS_SIGNATURE,
         "relationship_model": RELATIONSHIP_MODEL,
         "relationship_prompt": PAIRWISE_RELATIONSHIP_SYSTEM_PROMPT,
         "relationship_schema": RELATIONSHIP_SCHEMA,
     }
 )
+
+
+def _pairwise_claim_payload(paper: dict) -> list[dict]:
+    trimmed_claims: list[dict] = []
+    for claim in paper.get("claims", []):
+        trimmed_claims.append(
+            {
+                "claim_id": claim.get("claim_id", ""),
+                "claim": claim.get("claim", ""),
+                "claim_type": claim.get("claim_type", ""),
+                "evidence_type": claim.get("evidence_type", ""),
+                "evidence_strength": claim.get("evidence_strength", ""),
+                "key_variables": claim.get("key_variables", []),
+                "context": claim.get("context", ""),
+            }
+        )
+    return trimmed_claims
+
+
+def _classify_pairwise_failure(error: Exception | str) -> tuple[str, bool]:
+    text = str(error or "").strip()
+    lowered = text.lower()
+    if "rate limit" in lowered or "429" in lowered or "tokens per minute" in lowered:
+        return "rate_limit", True
+    if "529" in lowered or "overloaded" in lowered or "high traffic" in lowered:
+        return "overloaded", True
+    if "ran out of room" in lowered or "max_tokens" in lowered:
+        return "truncated", True
+    if "timed out" in lowered or "timeout" in lowered:
+        return "timeout", True
+    if (
+        "connection" in lowered
+        or "dns" in lowered
+        or "name resolution" in lowered
+        or "remote end closed" in lowered
+        or "temporarily unavailable" in lowered
+    ):
+        return "network", True
+    if (
+        "invalid structured output" in lowered
+        or "schema validation failed" in lowered
+        or "returned no text content" in lowered
+        or "unusable structured output" in lowered
+        or "expecting value" in lowered
+        or "unterminated string" in lowered
+    ):
+        return "structured_output", True
+    return "unknown", False
+
+
+def _parse_pairwise_relationships(
+    response_text: str,
+) -> tuple[list[dict], int, int]:
+    payload = json.loads(response_text)
+    if not isinstance(payload, dict):
+        raise ValueError("Structured output root must be an object.")
+
+    raw_relationships = payload.get("relationships")
+    if raw_relationships is None:
+        raise ValueError('Structured output is missing the "relationships" field.')
+    if not isinstance(raw_relationships, list):
+        raise ValueError('Structured output field "relationships" must be an array.')
+
+    valid_items: list[dict] = []
+    invalid_count = 0
+    for item in raw_relationships:
+        try:
+            validate_payload("relationship_item", item)
+        except ValueError:
+            invalid_count += 1
+            continue
+
+        valid_items.append(
+            {
+                "source_claim_id": item.get("source_claim_id", "").strip(),
+                "target_claim_id": item.get("target_claim_id", "").strip(),
+                "relationship": item.get("relationship", "").strip(),
+                "relationship_strength": item.get("relationship_strength", "").strip(),
+                "explanation": item.get("explanation", "").strip(),
+                "methodological_note": item.get("methodological_note", "").strip(),
+            }
+        )
+
+    return valid_items, invalid_count, len(raw_relationships)
 
 
 def _normalized_title_tokens(title: str) -> list[str]:
@@ -907,9 +991,9 @@ def analyze_pdf(
 def compare_papers(paper_a: dict, paper_b: dict) -> list[dict]:
     user_prompt = (
         f'Paper A: "{paper_a["title"]}"\n'
-        f"Claims from Paper A:\n{json.dumps(paper_a.get('claims', []), ensure_ascii=False)}\n\n"
+        f"Claims from Paper A:\n{json.dumps(_pairwise_claim_payload(paper_a), ensure_ascii=False)}\n\n"
         f'Paper B: "{paper_b["title"]}"\n'
-        f"Claims from Paper B:\n{json.dumps(paper_b.get('claims', []), ensure_ascii=False)}"
+        f"Claims from Paper B:\n{json.dumps(_pairwise_claim_payload(paper_b), ensure_ascii=False)}"
     )
     token_attempts = [PAIRWISE_MAX_TOKENS]
     if PAIRWISE_RETRY_MAX_TOKENS not in token_attempts:
@@ -920,8 +1004,7 @@ def compare_papers(paper_a: dict, paper_b: dict) -> list[dict]:
         response_text, metadata = _pairwise_response_payload(user_prompt, max_tokens)
         stop_reason = metadata.get("stop_reason")
         try:
-            payload = json.loads(response_text)
-            validate_payload("relationships", payload)
+            relationships, invalid_count, raw_count = _parse_pairwise_relationships(response_text)
         except (json.JSONDecodeError, ValueError) as exc:
             last_error = exc
             if stop_reason == "max_tokens" and attempt_index < len(token_attempts) - 1:
@@ -931,6 +1014,16 @@ def compare_papers(paper_a: dict, paper_b: dict) -> list[dict]:
                     "Hypatia ran out of room while comparing these papers."
                 ) from exc
             raise ClaudeAPIError(f"Pairwise comparison returned invalid structured output: {exc}") from exc
+
+        if raw_count > 0 and not relationships:
+            last_error = ValueError("All returned relationship items were invalid.")
+            if stop_reason == "max_tokens" and attempt_index < len(token_attempts) - 1:
+                continue
+            if stop_reason == "max_tokens":
+                raise ClaudeAPIError("Hypatia ran out of room while comparing these papers.")
+            raise ClaudeAPIError(
+                "Pairwise comparison returned unusable structured output: all relationship items were invalid."
+            ) from last_error
 
         if stop_reason == "max_tokens":
             if attempt_index < len(token_attempts) - 1:
@@ -944,7 +1037,7 @@ def compare_papers(paper_a: dict, paper_b: dict) -> list[dict]:
         raise ClaudeAPIError("Pairwise comparison failed.")
 
     cleaned: list[dict] = []
-    for relationship in payload.get("relationships", []):
+    for relationship in relationships:
         if relationship.get("relationship") not in ALL_RELATIONSHIPS:
             continue
         cleaned.append(relationship)
@@ -956,6 +1049,7 @@ def ensure_pairwise_relationships(
     manifest: dict,
     only_pairs: list[tuple[str, str]] | None = None,
     progress_callback: ProgressCallback | None = None,
+    execution_context: str = "batch",
 ) -> tuple[list[dict], list[dict]]:
     if only_pairs is None:
         paper_ids = sorted(papers)
@@ -1003,7 +1097,10 @@ def ensure_pairwise_relationships(
         current=0,
         total=len(pairs_to_process),
     )
-    max_workers = max(1, min(PAIRWISE_WORKERS, len(pairs_to_process)))
+    if execution_context == "upload":
+        max_workers = 1
+    else:
+        max_workers = max(1, min(PAIRWISE_WORKERS, len(pairs_to_process)))
     completed = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_map = {
@@ -1022,13 +1119,23 @@ def ensure_pairwise_relationships(
                     pairwise_signature=PAIRWISE_ANALYSIS_SIGNATURE,
                 )
             except Exception as exc:
-                record_failed_pair(left, right, str(exc), manifest)
+                error_kind, retryable = _classify_pairwise_failure(exc)
+                record_failed_pair(
+                    left,
+                    right,
+                    str(exc),
+                    manifest,
+                    error_kind=error_kind,
+                    retryable=retryable,
+                )
                 failures.append(
                     {
                         "pair_key": pair_key(left, right),
                         "paper_a_id": left,
                         "paper_b_id": right,
                         "error": str(exc),
+                        "error_kind": error_kind,
+                        "retryable": retryable,
                     }
                 )
             completed += 1
@@ -1176,6 +1283,7 @@ def preprocess_corpus(
     relationships, pair_failures = ensure_pairwise_relationships(
         papers,
         manifest,
+        execution_context="batch",
         progress_callback=_pairwise_progress,
     )
     _emit_progress(
@@ -1312,6 +1420,7 @@ def merge_uploaded_paper(
         papers,
         manifest,
         only_pairs=only_pairs,
+        execution_context="upload",
         progress_callback=_pairwise_progress,
     )
     _emit_progress(

@@ -182,12 +182,17 @@ def record_failed_pair(
     paper_b_id: str,
     error: str,
     manifest: dict,
+    *,
+    error_kind: str = "unknown",
+    retryable: bool = True,
 ) -> None:
     key = pair_key(paper_a_id, paper_b_id)
     manifest.setdefault("failed_pairs", {})[key] = {
         "paper_a_id": min(paper_a_id, paper_b_id),
         "paper_b_id": max(paper_a_id, paper_b_id),
         "error": error,
+        "error_kind": error_kind,
+        "retryable": retryable,
         "updated_at": utc_now_iso(),
     }
 

@@ -40,7 +40,11 @@ Rules:
 - "qualifies" means one paper narrows or adds conditions to the other's broader claim.
 - "extends" means one paper builds on or generalizes the other's finding.
 - "supports" means both papers reach similar conclusions independently.
-- "uses_same_method" and "uses_same_data" are supplemental relationship labels, not substitutes for substantive agreement or disagreement.
+- Focus first on substantive cross-paper relationships: "supports", "contradicts", "extends", and "qualifies".
+- "uses_same_method" and "uses_same_data" are optional supplemental labels. Only return them when they add real value and avoid emitting them eagerly.
+- Prefer the strongest, most informative, non-duplicative claim pairings rather than exhaustively repeating near-identical matches.
+- Keep "explanation" to one short sentence.
+- Leave "methodological_note" empty unless methodology or data differences materially explain the relationship.
 - If the two papers' claims do not meaningfully interact, return an empty relationships array.
 - Do not force relationships where none exist.
 """.strip()

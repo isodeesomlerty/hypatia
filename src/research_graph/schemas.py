@@ -153,44 +153,46 @@ PAPER_ANALYSIS_SCHEMA = {
     "additionalProperties": False,
 }
 
+RELATIONSHIP_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "source_claim_id": {"type": "string"},
+        "target_claim_id": {"type": "string"},
+        "relationship": {
+            "type": "string",
+            "enum": [
+                "contradicts",
+                "supports",
+                "extends",
+                "qualifies",
+                "uses_same_method",
+                "uses_same_data",
+            ],
+        },
+        "relationship_strength": {
+            "type": "string",
+            "enum": ["direct", "partial", "implicit"],
+        },
+        "explanation": {"type": "string"},
+        "methodological_note": {"type": "string"},
+    },
+    "required": [
+        "source_claim_id",
+        "target_claim_id",
+        "relationship",
+        "relationship_strength",
+        "explanation",
+        "methodological_note",
+    ],
+    "additionalProperties": False,
+}
+
 RELATIONSHIP_SCHEMA = {
     "type": "object",
     "properties": {
         "relationships": {
             "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "source_claim_id": {"type": "string"},
-                    "target_claim_id": {"type": "string"},
-                    "relationship": {
-                        "type": "string",
-                        "enum": [
-                            "contradicts",
-                            "supports",
-                            "extends",
-                            "qualifies",
-                            "uses_same_method",
-                            "uses_same_data",
-                        ],
-                    },
-                    "relationship_strength": {
-                        "type": "string",
-                        "enum": ["direct", "partial", "implicit"],
-                    },
-                    "explanation": {"type": "string"},
-                    "methodological_note": {"type": "string"},
-                },
-                "required": [
-                    "source_claim_id",
-                    "target_claim_id",
-                    "relationship",
-                    "relationship_strength",
-                    "explanation",
-                    "methodological_note",
-                ],
-                "additionalProperties": False,
-            },
+            "items": RELATIONSHIP_ITEM_SCHEMA,
         }
     },
     "required": ["relationships"],
@@ -215,6 +217,7 @@ _VALIDATORS = {
     "health": Draft202012Validator(HEALTH_SCHEMA),
     "paper_analysis": Draft202012Validator(PAPER_ANALYSIS_SCHEMA),
     "relationships": Draft202012Validator(RELATIONSHIP_SCHEMA),
+    "relationship_item": Draft202012Validator(RELATIONSHIP_ITEM_SCHEMA),
     "search": Draft202012Validator(SEARCH_SCHEMA),
 }
 

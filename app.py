@@ -69,7 +69,11 @@ def load_dataset_into_session(force: bool = False) -> None:
     st.session_state.paper_edges = paper_edges
     st.session_state.manifest = manifest
     st.session_state.relationship_index = build_relationship_index(relationships, papers)
-    st.session_state.failed_pairs = build_pending_pair_index(manifest, papers)
+    st.session_state.failed_pairs = build_pending_pair_index(
+        manifest,
+        papers,
+        pairwise_signature=PAIRWISE_ANALYSIS_SIGNATURE,
+    )
     st.session_state.data_loaded = True
 
 
@@ -84,7 +88,11 @@ def sync_dataset(
     st.session_state.paper_edges = paper_edges
     st.session_state.manifest = manifest
     st.session_state.relationship_index = build_relationship_index(relationships, papers)
-    st.session_state.failed_pairs = build_pending_pair_index(manifest, papers)
+    st.session_state.failed_pairs = build_pending_pair_index(
+        manifest,
+        papers,
+        pairwise_signature=PAIRWISE_ANALYSIS_SIGNATURE,
+    )
     st.session_state.data_loaded = True
 
 

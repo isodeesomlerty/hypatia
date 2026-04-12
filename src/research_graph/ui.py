@@ -108,8 +108,8 @@ def _count_label(count: int, singular: str, plural: str | None = None) -> str:
 
 def _pending_relationship_message(count: int) -> str:
     if count == 1:
-        return "1 paper relationship is still pending."
-    return f"{count} paper relationships are still pending."
+        return "1 paper relationship is pending because the comparison did not complete."
+    return f"{count} paper relationships are pending because their comparisons did not complete."
 
 
 def _evidence_strength_tone(value: str | None) -> str:
@@ -258,13 +258,28 @@ def _paper_tile_meta(paper: dict) -> str:
     return " | ".join(metadata_bits)
 
 
-def _friendly_pair_error(error: str) -> str:
+def _friendly_pair_error(error: str, error_kind: str | None = None) -> str:
     text = (error or "").strip()
     lowered = text.lower()
+    normalized_kind = (error_kind or "").strip().lower()
+    if normalized_kind == "truncated":
+        return "Hypatia ran out of room while comparing these papers. Retrying later should usually recover it."
+    if normalized_kind == "structured_output":
+        return "Hypatia received an incomplete comparison result while linking these papers."
+    if normalized_kind == "rate_limit":
+        return "Hypatia was temporarily rate-limited while comparing these papers."
+    if normalized_kind == "overloaded":
+        return "Anthropic was temporarily overloaded while comparing these papers."
+    if normalized_kind == "timeout":
+        return "The paper comparison took too long to finish."
+    if normalized_kind == "network":
+        return "A network issue interrupted the paper comparison."
     if "ran out of room" in lowered or "max_tokens" in lowered:
         return "Hypatia ran out of room while comparing these papers. Retrying later should usually recover it."
     if "invalid structured output" in lowered or "unterminated string" in lowered:
         return "Hypatia received an incomplete comparison result while linking these papers."
+    if "all relationship items were invalid" in lowered:
+        return "Hypatia received a malformed comparison result while linking these papers."
     if "rate limit" in lowered or "429" in lowered:
         return "Hypatia was temporarily rate-limited while comparing these papers."
     if not text:
@@ -1481,7 +1496,7 @@ def render_edge_details(
                 f"""
                 <div class="rg-check-shell">
                   <strong>Last attempt</strong>
-                  <div class="rg-help-text" style="margin-top:0.55rem;">{escape(_friendly_pair_error(pending.get('error', '')))}</div>
+                  <div class="rg-help-text" style="margin-top:0.55rem;">{escape(_friendly_pair_error(pending.get('error', ''), pending.get('error_kind', '')))}</div>
                   {f'<div class="rg-detail-meta" style="margin-top:0.35rem;">Technical detail: {escape(pending.get("error", ""))}</div>' if pending.get('error') else ''}
                 </div>
                 """,

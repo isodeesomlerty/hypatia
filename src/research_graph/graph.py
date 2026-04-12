@@ -4,7 +4,7 @@ from collections import defaultdict
 from html import escape
 
 from .cache import pair_key
-from .config import EDGE_COLORS, HEALTH_COLORS, VISUAL_RELATIONSHIPS
+from .config import CACHE_DIR, EDGE_COLORS, HEALTH_COLORS, VISUAL_RELATIONSHIPS
 
 
 def claim_to_paper_lookup(papers: dict[str, dict]) -> dict[str, str]:
@@ -85,9 +85,18 @@ def build_relationship_index(
 def build_pending_pair_index(
     manifest: dict,
     papers: dict[str, dict],
+    pairwise_signature: str | None = None,
 ) -> dict[str, dict]:
     paper_ids = set(papers)
-    processed_pairs = set(manifest.get("processed_pairs", {}))
+    processed_pairs = {
+        key
+        for key, entry in manifest.get("processed_pairs", {}).items()
+        if (
+            (not pairwise_signature or entry.get("pairwise_signature") == pairwise_signature)
+            and entry.get("pair_cache_path")
+            and (CACHE_DIR / entry["pair_cache_path"]).exists()
+        )
+    }
     pending: dict[str, dict] = {}
     for key, entry in manifest.get("failed_pairs", {}).items():
         if key in processed_pairs:
@@ -99,6 +108,8 @@ def build_pending_pair_index(
             "paper_a_id": left,
             "paper_b_id": right,
             "error": entry.get("error", ""),
+            "error_kind": entry.get("error_kind", "unknown"),
+            "retryable": bool(entry.get("retryable", True)),
             "updated_at": entry.get("updated_at", ""),
             "status": "pending",
         }
