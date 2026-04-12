@@ -1,0 +1,6 @@
+streamlit>=1.42,<2
+requests>=2.32,<3
+python-dotenv>=1.0,<2
+jsonschema>=4.23,<5
+pdfplumber>=0.11,<1
+PyMuPDF>=1.24,<2

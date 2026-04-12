@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hypatia Network</title>
+    <script src="vendor/vis-network.min.js"></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        font-family: Georgia, "Times New Roman", serif;
+      }
+
+      #graph-root {
+        width: 100%;
+        height: 100%;
+        min-height: 520px;
+        border-radius: 28px;
+        background:
+          radial-gradient(circle at top right, rgba(185, 109, 56, 0.08), transparent 34%),
+          linear-gradient(180deg, #fffbf6 0%, #f6efe4 100%);
+        border: 1px solid rgba(55, 39, 24, 0.08);
+        box-shadow: 0 20px 60px rgba(43, 30, 18, 0.08);
+      }
+
+      .vis-tooltip {
+        max-width: 320px;
+        padding: 10px 12px;
+        border-radius: 16px;
+        border: 1px solid rgba(66, 45, 27, 0.12);
+        background: rgba(255, 251, 246, 0.96);
+        color: #201812;
+        box-shadow: 0 16px 40px rgba(43, 30, 18, 0.14);
+        font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+        font-size: 13px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="graph-root"></div>
+    <script>
+      const root = document.getElementById("graph-root");
+
+      let nodeDataSet = null;
+      let edgeDataSet = null;
+      let network = null;
+      let lastSelection = JSON.stringify({ type: "background", id: null });
+      let lastResetToken = null;
+
+      function sendMessage(type, payload) {
+        const message = Object.assign(
+          {
+            isStreamlitMessage: true,
+            type,
+          },
+          payload || {}
+        );
+        window.parent.postMessage(message, "*");
+      }
+
+      function setComponentReady() {
+        sendMessage("streamlit:componentReady", { apiVersion: 1 });
+      }
+
+      function setFrameHeight(height) {
+        sendMessage("streamlit:setFrameHeight", { height });
+      }
+
+      function setComponentValue(value) {
+        sendMessage("streamlit:setComponentValue", {
+          value,
+          dataType: "json",
+        });
+      }
+
+      function buildTooltipNode(value) {
+        if (value === null || value === undefined || value === "") {
+          return value;
+        }
+        const tooltip = document.createElement("div");
+        tooltip.textContent = String(value);
+        tooltip.style.whiteSpace = "pre-wrap";
+        tooltip.style.overflowWrap = "anywhere";
+        tooltip.style.wordBreak = "break-word";
+        tooltip.style.maxWidth = "320px";
+        tooltip.style.display = "block";
+        return tooltip;
+      }
+
+      function hydrateTooltipItems(items) {
+        return items.map((item) => {
+          if (!item || !Object.prototype.hasOwnProperty.call(item, "title")) {
+            return item;
+          }
+          return Object.assign({}, item, {
+            title: buildTooltipNode(item.title),
+          });
+        });
+      }
+
+      function ensureNetwork(height) {
+        if (network) {
+          return;
+        }
+
+        root.style.height = `${height || 760}px`;
+        nodeDataSet = new vis.DataSet([]);
+        edgeDataSet = new vis.DataSet([]);
+        network = new vis.Network(
+          root,
+          { nodes: nodeDataSet, edges: edgeDataSet },
+          {
+            autoResize: true,
+            interaction: {
+              hover: true,
+              tooltipDelay: 120,
+              dragNodes: true,
+              dragView: true,
+              zoomView: true,
+            },
+            physics: {
+              stabilization: {
+                iterations: 180,
+                fit: true,
+              },
+              barnesHut: {
+                gravitationalConstant: -4200,
+                springLength: 165,
+                springConstant: 0.02,
+                damping: 0.22,
+              },
+            },
+            nodes: {
+              borderWidth: 0,
+            },
+            edges: {
+              selectionWidth: 2,
+            },
+          }
+        );
+
+        network.on("click", (params) => {
+          let selection = { type: "background", id: null };
+          if (params.nodes && params.nodes.length > 0) {
+            selection = { type: "node", id: params.nodes[0] };
+          } else if (params.edges && params.edges.length > 0) {
+            selection = { type: "edge", id: params.edges[0] };
+          }
+
+          const serialized = JSON.stringify(selection);
+          if (serialized !== lastSelection) {
+            lastSelection = serialized;
+            setComponentValue(selection);
+          }
+        });
+
+        network.once("stabilizationIterationsDone", () => {
+          setFrameHeight((height || 760) + 8);
+        });
+      }
+
+      function render(args) {
+        const nodes = Array.isArray(args.nodes) ? args.nodes : [];
+        const edges = Array.isArray(args.edges) ? args.edges : [];
+        const focusNodeIds = Array.isArray(args.focus_node_ids) ? args.focus_node_ids : [];
+        const resetToken = args.reset_token;
+        const height = Number(args.height || 760);
+
+        ensureNetwork(height);
+
+        root.style.height = `${height}px`;
+        nodeDataSet.clear();
+        edgeDataSet.clear();
+        nodeDataSet.add(hydrateTooltipItems(nodes));
+        edgeDataSet.add(hydrateTooltipItems(edges));
+
+        if (resetToken !== lastResetToken) {
+          lastResetToken = resetToken;
+          network.unselectAll();
+          lastSelection = JSON.stringify({ type: "background", id: null });
+          setComponentValue({ type: "background", id: null });
+          if (focusNodeIds.length > 0) {
+            network.fit({
+              nodes: focusNodeIds,
+              animation: { duration: 600, easingFunction: "easeInOutQuad" },
+            });
+          } else {
+            network.fit({
+              animation: { duration: 400, easingFunction: "easeInOutQuad" },
+            });
+          }
+        } else if (focusNodeIds.length > 0) {
+          network.fit({
+            nodes: focusNodeIds,
+            animation: { duration: 600, easingFunction: "easeInOutQuad" },
+          });
+        }
+
+        setFrameHeight(height + 8);
+      }
+
+      window.addEventListener("message", (event) => {
+        if (event.data.type !== "streamlit:render") {
+          return;
+        }
+        render(event.data.args || {});
+      });
+
+      setComponentReady();
+      setFrameHeight(768);
+    </script>
+  </body>
+</html>
