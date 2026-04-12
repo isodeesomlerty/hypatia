@@ -9,11 +9,13 @@ RAW_DIR = DATA_DIR / "raw"
 CACHE_DIR = DATA_DIR / "cache"
 PAPER_CACHE_DIR = CACHE_DIR / "papers"
 PAIR_CACHE_DIR = CACHE_DIR / "pairs"
+PAIR_FAILURE_DIR = CACHE_DIR / "pair_failures"
 
 MANIFEST_PATH = CACHE_DIR / "manifest.json"
 PAPERS_PATH = CACHE_DIR / "papers.json"
 RELATIONSHIPS_PATH = CACHE_DIR / "relationships.json"
 PAPER_EDGES_PATH = CACHE_DIR / "paper_edges.json"
+MEASURES_PATH = CACHE_DIR / "measures.json"
 
 API_BASE_URL = "https://api.anthropic.com"
 API_VERSION = "2023-06-01"
@@ -38,7 +40,13 @@ PDF_MAX_FILE_MB = int(os.getenv("RG_PDF_MAX_FILE_MB", "32"))
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("RG_REQUEST_TIMEOUT_SECONDS", "180"))
 SEARCH_TIMEOUT_SECONDS = int(os.getenv("RG_SEARCH_TIMEOUT_SECONDS", "60"))
 EXTRACTION_WORKERS = int(os.getenv("RG_EXTRACTION_WORKERS", "8"))
-PAIRWISE_WORKERS = int(os.getenv("RG_PAIRWISE_WORKERS", "16"))
+PAIRWISE_WORKERS = int(os.getenv("RG_PAIRWISE_WORKERS", "4"))
+PAIRWISE_SERIAL_RETRY_ATTEMPTS = int(os.getenv("RG_PAIRWISE_SERIAL_RETRY_ATTEMPTS", "1"))
+PAIRWISE_MAX_TOKENS = int(os.getenv("RG_PAIRWISE_MAX_TOKENS", "2048"))
+PAIRWISE_FALLBACK_MAX_TOKENS = int(os.getenv("RG_PAIRWISE_FALLBACK_MAX_TOKENS", "3072"))
+PAIRWISE_COMPACT_CLAIMS_PER_PAPER = int(
+    os.getenv("RG_PAIRWISE_COMPACT_CLAIMS_PER_PAPER", "6")
+)
 API_MAX_RETRIES = int(os.getenv("RG_API_MAX_RETRIES", "2"))
 API_RETRY_BASE_DELAY_SECONDS = float(os.getenv("RG_API_RETRY_BASE_DELAY_SECONDS", "1.0"))
 
@@ -74,5 +82,12 @@ DEFAULT_MANIFEST = {
 
 
 def ensure_project_dirs() -> None:
-    for path in (DATA_DIR, RAW_DIR, CACHE_DIR, PAPER_CACHE_DIR, PAIR_CACHE_DIR):
+    for path in (
+        DATA_DIR,
+        RAW_DIR,
+        CACHE_DIR,
+        PAPER_CACHE_DIR,
+        PAIR_CACHE_DIR,
+        PAIR_FAILURE_DIR,
+    ):
         path.mkdir(parents=True, exist_ok=True)

@@ -16,10 +16,12 @@ from .config import (
     DEFAULT_MANIFEST,
     MANIFEST_PATH,
     PAIR_CACHE_DIR,
+    PAIR_FAILURE_DIR,
     PAPER_CACHE_DIR,
     PAPER_EDGES_PATH,
     PAPERS_PATH,
     RELATIONSHIPS_PATH,
+    ROOT_DIR,
     ensure_project_dirs,
 )
 
@@ -129,6 +131,59 @@ def pair_cache_path_from_key(key: str) -> Path:
     return PAIR_CACHE_DIR / pair_cache_filename(left, right)
 
 
+def pair_failure_path_from_key(key: str) -> Path:
+    left, right = key.split("||", maxsplit=1)
+    return PAIR_FAILURE_DIR / pair_cache_filename(left, right)
+
+
+def display_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT_DIR))
+    except ValueError:
+        return str(path)
+
+
+def current_pairwise_status(
+    papers: dict[str, dict],
+    manifest: dict,
+    paper_edges: dict[tuple[str, str], dict] | None = None,
+    pairwise_signature: str | None = None,
+) -> dict[str, int]:
+    paper_ids = sorted(papers)
+    potential_pair_keys = {
+        pair_key(paper_ids[index], paper_ids[other_index])
+        for index in range(len(paper_ids))
+        for other_index in range(index + 1, len(paper_ids))
+    }
+
+    processed_pair_count = 0
+    pairs_with_relationships_count = 0
+    processed_pairs = manifest.get("processed_pairs", {})
+    for key in potential_pair_keys:
+        entry = processed_pairs.get(key)
+        if not entry:
+            continue
+        if pairwise_signature and entry.get("pairwise_signature") != pairwise_signature:
+            continue
+        rel_path = entry.get("pair_cache_path")
+        if not rel_path or not (CACHE_DIR / rel_path).exists():
+            continue
+        processed_pair_count += 1
+        if entry.get("relationship_count", 0) > 0:
+            pairs_with_relationships_count += 1
+
+    potential_pair_count = len(potential_pair_keys)
+    paper_edge_count = len(paper_edges or {})
+    return {
+        "paper_count": len(papers),
+        "potential_pair_count": potential_pair_count,
+        "processed_pair_count": processed_pair_count,
+        "unprocessed_pair_count": max(0, potential_pair_count - processed_pair_count),
+        "pairs_with_relationships_count": pairs_with_relationships_count,
+        "paper_edge_count": paper_edge_count,
+    }
+
+
 def save_paper_record(paper: dict, manifest: dict, analysis_signature: str | None = None) -> None:
     source_hash = paper["source_hash"]
     cache_path = paper_cache_path_for_hash(source_hash)
@@ -166,6 +221,7 @@ def save_pair_relationships(
         "updated_at": utc_now_iso(),
     }
     write_json(cache_path, payload)
+    _delete_path(pair_failure_path_from_key(key))
     manifest["processed_pairs"][key] = {
         "pair_cache_path": str(cache_path.relative_to(CACHE_DIR)),
         "relationship_count": len(relationships),
@@ -197,6 +253,27 @@ def remove_pair_relationships_for_paper(paper_id: str, manifest: dict) -> None:
         rel_path = entry.get("pair_cache_path")
         if rel_path:
             _delete_path(CACHE_DIR / rel_path)
+        _delete_path(pair_failure_path_from_key(key))
+    for path in PAIR_FAILURE_DIR.glob("*.json"):
+        left, right = path.stem.split("__", maxsplit=1)
+        if paper_id in {left, right}:
+            _delete_path(path)
+
+
+def save_pair_failure_artifact(
+    paper_a_id: str,
+    paper_b_id: str,
+    payload: dict[str, Any],
+) -> Path:
+    key = pair_key(paper_a_id, paper_b_id)
+    cache_path = pair_failure_path_from_key(key)
+    artifact = deepcopy(payload)
+    artifact["pair_key"] = key
+    artifact["paper_a_id"] = min(paper_a_id, paper_b_id)
+    artifact["paper_b_id"] = max(paper_a_id, paper_b_id)
+    artifact["updated_at"] = utc_now_iso()
+    write_json(cache_path, artifact)
+    return cache_path
 
 
 def clear_cached_corpus() -> dict:
@@ -208,7 +285,7 @@ def clear_cached_corpus() -> dict:
         MANIFEST_PATH,
     ):
         _delete_path(path)
-    for directory in (PAPER_CACHE_DIR, PAIR_CACHE_DIR):
+    for directory in (PAPER_CACHE_DIR, PAIR_CACHE_DIR, PAIR_FAILURE_DIR):
         _delete_path(directory)
         directory.mkdir(parents=True, exist_ok=True)
     manifest = deepcopy(DEFAULT_MANIFEST)

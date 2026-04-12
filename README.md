@@ -34,10 +34,22 @@ cp .env.example .env
 python scripts/preprocess_corpus.py
 ```
 
+Or use the shortcut:
+
+```bash
+make refresh
+```
+
 5. Launch the app:
 
 ```bash
 streamlit run app.py
+```
+
+Or use:
+
+```bash
+make run
 ```
 
 ## Notes
@@ -45,3 +57,4 @@ streamlit run app.py
 - The preprocessed cache is written to `data/cache/`.
 - Live upload uses the same analysis path as offline preprocessing, but only for one paper at a time.
 - Password-protected, oversized, or overly long PDFs are rejected with a clear error instead of being processed unreliably.
+- Override the PDF source directory when refreshing with `make refresh RAW_DIR=/absolute/path/to/pdfs`.

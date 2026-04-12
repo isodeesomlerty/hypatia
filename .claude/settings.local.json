@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python -c \"from src.research_graph.measures import compute_measures; print\\('import ok'\\)\")"
+    ]
+  }
+}

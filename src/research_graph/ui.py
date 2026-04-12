@@ -740,13 +740,23 @@ def render_hero() -> None:
     )
 
 
-def render_metric_cards(paper_count: int, relationship_count: int, edge_count: int) -> None:
+def render_metric_cards(
+    paper_count: int,
+    relationship_count: int,
+    edge_count: int,
+    pairwise_status: dict[str, int] | None = None,
+) -> None:
+    pairwise_status = pairwise_status or {}
+    potential_pair_count = pairwise_status.get("potential_pair_count", 0)
+    processed_pair_count = pairwise_status.get("processed_pair_count", 0)
     cards = [
         ("Corpus", str(paper_count), "papers loaded"),
+        ("Potential Pairs", str(potential_pair_count), "possible paper-to-paper comparisons"),
+        ("Processed Pairs", str(processed_pair_count), "pairwise comparisons completed"),
         ("Claim Relationships", str(relationship_count), "cross-paper claim relationships"),
-        ("Paper Relationships", str(edge_count), "relationships shown in the map"),
+        ("Paper Relationships", str(edge_count), "paper pairs deemed related enough to draw"),
     ]
-    columns = st.columns(3)
+    columns = st.columns(len(cards))
     for column, (label, value, note) in zip(columns, cards):
         with column:
             st.markdown(

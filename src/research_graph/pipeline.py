@@ -18,6 +18,8 @@ import requests
 
 from .cache import (
     compute_sha256,
+    current_pairwise_status,
+    display_path,
     load_all_pair_relationships,
     load_all_paper_records,
     load_manifest,
@@ -25,6 +27,7 @@ from .cache import (
     pair_key,
     record_failed_file,
     save_combined_dataset,
+    save_pair_failure_artifact,
     save_pair_relationships,
     save_paper_record,
 )
@@ -37,6 +40,11 @@ from .config import (
     CACHE_DIR,
     EXTRACTION_WORKERS,
     FILES_API_BETA,
+    MEASURES_PATH,
+    PAIRWISE_COMPACT_CLAIMS_PER_PAPER,
+    PAIRWISE_FALLBACK_MAX_TOKENS,
+    PAIRWISE_MAX_TOKENS,
+    PAIRWISE_SERIAL_RETRY_ATTEMPTS,
     PAIRWISE_WORKERS,
     PAPER_ANALYSIS_INPUT_MODE,
     PAPER_ANALYSIS_MODEL,
@@ -51,6 +59,7 @@ from .config import (
     SEARCH_TIMEOUT_SECONDS,
     ensure_project_dirs,
 )
+from .measures import compute_measures
 from .graph import aggregate_paper_edges, paper_ids_for_claim_ids
 from .prompts import (
     PAIRWISE_RELATIONSHIP_SYSTEM_PROMPT,
@@ -72,6 +81,43 @@ class ResearchGraphError(RuntimeError):
 
 class ClaudeAPIError(ResearchGraphError):
     """Raised when Claude API calls fail."""
+
+
+class ClaudeResponseFormatError(ClaudeAPIError):
+    """Raised when Claude returns malformed structured output."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str = "response_format_error",
+        raw_text: str = "",
+        response_payload: dict[str, Any] | None = None,
+        model: str | None = None,
+        request_name: str | None = None,
+        prompt_mode: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.raw_text = raw_text
+        self.response_payload = response_payload or {}
+        self.model = model
+        self.request_name = request_name
+        self.prompt_mode = prompt_mode
+
+    def debug_payload(self) -> dict[str, Any]:
+        return {
+            "error_type": self.error_code,
+            "model": self.model,
+            "request_name": self.request_name,
+            "prompt_mode": self.prompt_mode,
+            "raw_response_text": self.raw_text,
+            "raw_response_text_length": len(self.raw_text),
+            "response_id": self.response_payload.get("id"),
+            "stop_reason": self.response_payload.get("stop_reason"),
+            "stop_sequence": self.response_payload.get("stop_sequence"),
+            "usage": self.response_payload.get("usage"),
+        }
 
 
 class PDFGuardrailError(ResearchGraphError):
@@ -378,6 +424,8 @@ def _post_message(
     max_tokens: int,
     timeout_seconds: int,
     include_files_beta: bool = False,
+    request_name: str | None = None,
+    prompt_mode: str | None = None,
 ) -> dict:
     payload = {
         "model": model,
@@ -400,7 +448,19 @@ def _post_message(
         )
     )
     parsed = response.json()
-    return json.loads(_parse_message_text(parsed))
+    text = _parse_message_text(parsed)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ClaudeResponseFormatError(
+            f"Unterminated or malformed JSON returned by Claude: {exc}",
+            error_code="malformed_json",
+            raw_text=text,
+            response_payload=parsed,
+            model=model,
+            request_name=request_name,
+            prompt_mode=prompt_mode,
+        ) from exc
 
 
 def _upload_pdf_to_files_api(pdf_path: Path) -> dict:
@@ -861,22 +921,59 @@ def analyze_pdf(
     return paper
 
 
-def compare_papers(paper_a: dict, paper_b: dict) -> list[dict]:
-    user_prompt = (
+def _truncate_prompt_text(value: str | None, limit: int = 220) -> str:
+    text = (value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _pairwise_claims_payload(claims: list[dict], *, compact: bool) -> list[dict]:
+    if not compact:
+        return claims
+
+    compact_claims: list[dict[str, Any]] = []
+    for claim in claims[:PAIRWISE_COMPACT_CLAIMS_PER_PAPER]:
+        compact_claims.append(
+            {
+                "claim_id": claim.get("claim_id"),
+                "claim": _truncate_prompt_text(claim.get("claim"), limit=360),
+                "claim_type": claim.get("claim_type"),
+                "evidence_strength": claim.get("evidence_strength"),
+                "context": _truncate_prompt_text(claim.get("context"), limit=220),
+                "key_variables": list(claim.get("key_variables", []))[:5],
+            }
+        )
+    return compact_claims
+
+
+def _pairwise_user_prompt(
+    paper_a: dict,
+    paper_b: dict,
+    *,
+    compact: bool,
+) -> str:
+    if compact:
+        prompt_intro = (
+            "Compact claim summaries are shown below because a previous structured-output "
+            "attempt returned malformed JSON. Return only the strongest, clearest "
+            "cross-paper relationships."
+        )
+    else:
+        prompt_intro = "Full extracted claims are shown below."
+
+    return (
+        f"{prompt_intro}\n\n"
         f'Paper A: "{paper_a["title"]}"\n'
-        f"Claims from Paper A:\n{json.dumps(paper_a.get('claims', []), ensure_ascii=False)}\n\n"
+        f"Claims from Paper A:\n"
+        f"{json.dumps(_pairwise_claims_payload(paper_a.get('claims', []), compact=compact), ensure_ascii=False)}\n\n"
         f'Paper B: "{paper_b["title"]}"\n'
-        f"Claims from Paper B:\n{json.dumps(paper_b.get('claims', []), ensure_ascii=False)}"
+        f"Claims from Paper B:\n"
+        f"{json.dumps(_pairwise_claims_payload(paper_b.get('claims', []), compact=compact), ensure_ascii=False)}"
     )
-    payload = _post_message(
-        model=RELATIONSHIP_MODEL,
-        system_prompt=PAIRWISE_RELATIONSHIP_SYSTEM_PROMPT,
-        content=[{"type": "text", "text": user_prompt}],
-        schema=RELATIONSHIP_SCHEMA,
-        max_tokens=2048,
-        timeout_seconds=REQUEST_TIMEOUT_SECONDS,
-        include_files_beta=False,
-    )
+
+
+def _clean_relationship_payload(payload: dict) -> list[dict]:
     validate_payload("relationships", payload)
 
     cleaned: list[dict] = []
@@ -885,6 +982,99 @@ def compare_papers(paper_a: dict, paper_b: dict) -> list[dict]:
             continue
         cleaned.append(relationship)
     return cleaned
+
+
+def _compare_papers_once(
+    paper_a: dict,
+    paper_b: dict,
+    *,
+    compact: bool,
+) -> list[dict]:
+    payload = _post_message(
+        model=RELATIONSHIP_MODEL,
+        system_prompt=PAIRWISE_RELATIONSHIP_SYSTEM_PROMPT,
+        content=[{"type": "text", "text": _pairwise_user_prompt(paper_a, paper_b, compact=compact)}],
+        schema=RELATIONSHIP_SCHEMA,
+        max_tokens=PAIRWISE_FALLBACK_MAX_TOKENS if compact else PAIRWISE_MAX_TOKENS,
+        timeout_seconds=REQUEST_TIMEOUT_SECONDS,
+        include_files_beta=False,
+        request_name="pairwise_relationships",
+        prompt_mode="compact_claims_retry" if compact else "full_claims",
+    )
+    return _clean_relationship_payload(payload)
+
+
+def compare_papers(paper_a: dict, paper_b: dict) -> list[dict]:
+    try:
+        return _compare_papers_once(paper_a, paper_b, compact=False)
+    except ClaudeResponseFormatError as exc:
+        try:
+            return _compare_papers_once(paper_a, paper_b, compact=True)
+        except Exception as retry_exc:
+            raise retry_exc from exc
+
+
+def _pair_error_type(error: Exception | str) -> str:
+    if isinstance(error, ClaudeResponseFormatError):
+        return error.error_code
+    return getattr(error, "error_code", "pairwise_error")
+
+
+def _pair_error_message(error: Exception | str) -> str:
+    error_type = _pair_error_type(error)
+    message = str(error).strip() or error_type
+    if error_type != "pairwise_error" and not message.startswith(f"{error_type}:"):
+        return f"{error_type}: {message}"
+    return message
+
+
+def _pair_failure(left: str, right: str, error: Exception | str) -> dict[str, str]:
+    return {
+        "pair_key": pair_key(left, right),
+        "paper_a_id": left,
+        "paper_b_id": right,
+        "error": _pair_error_message(error),
+    }
+
+
+def _pair_progress_details(
+    papers: dict[str, dict],
+    left: str,
+    right: str,
+) -> dict[str, str]:
+    return {
+        "pair_key": pair_key(left, right),
+        "paper_a_id": left,
+        "paper_b_id": right,
+        "paper_a_title": papers.get(left, {}).get("title", left),
+        "paper_b_title": papers.get(right, {}).get("title", right),
+    }
+
+
+def _record_pair_failure(
+    papers: dict[str, dict],
+    left: str,
+    right: str,
+    error: Exception | str,
+    *,
+    pair_phase: str,
+    retry_attempt: int | None = None,
+) -> dict[str, str]:
+    artifact_payload: dict[str, Any] = {
+        **_pair_progress_details(papers, left, right),
+        "pair_phase": pair_phase,
+        "retry_attempt": retry_attempt,
+        "error": _pair_error_message(error),
+        "error_type": _pair_error_type(error),
+    }
+    if isinstance(error, ClaudeResponseFormatError):
+        artifact_payload.update(error.debug_payload())
+
+    artifact_path = save_pair_failure_artifact(left, right, artifact_payload)
+    failure = _pair_failure(left, right, error)
+    failure["debug_path"] = display_path(artifact_path)
+    failure["error_type"] = artifact_payload["error_type"]
+    return failure
 
 
 def ensure_pairwise_relationships(
@@ -902,6 +1092,7 @@ def ensure_pairwise_relationships(
         ]
     else:
         candidate_pairs = [tuple(sorted(pair)) for pair in only_pairs if pair[0] != pair[1]]
+    candidate_pairs = list(dict.fromkeys(candidate_pairs))
 
     existing_pairs = {
         key
@@ -915,16 +1106,29 @@ def ensure_pairwise_relationships(
     pairs_to_process = [
         pair for pair in candidate_pairs if pair_key(pair[0], pair[1]) not in existing_pairs
     ]
+    candidate_pair_count = len(candidate_pairs)
+    cached_pair_count = candidate_pair_count - len(pairs_to_process)
 
     failures: list[dict] = []
     if not pairs_to_process:
         _emit_progress(
             progress_callback,
             stage="pairwise_complete",
-            message="No new paper relationships were needed.",
+            message=(
+                "All candidate paper comparisons were already cached; "
+                "skipping fresh pairwise analysis."
+                if candidate_pair_count
+                else "No paper comparisons were needed."
+            ),
             progress=1.0,
-            current=0,
-            total=0,
+            current=candidate_pair_count,
+            total=candidate_pair_count,
+            candidate_pairs_total=candidate_pair_count,
+            cached_pairs_skipped=cached_pair_count,
+            fresh_pairs_total=0,
+            successful_pairs_count=0,
+            failed_pairs_count=0,
+            skipped_all_cached=bool(candidate_pair_count),
         )
         return load_all_pair_relationships(
             manifest,
@@ -934,10 +1138,17 @@ def ensure_pairwise_relationships(
     _emit_progress(
         progress_callback,
         stage="pairwise_start",
-        message="Finding related papers in the map.",
+        message=(
+            f"Preparing {len(pairs_to_process)} fresh pairwise comparisons; "
+            f"{cached_pair_count} already cached."
+        ),
         progress=0.0,
         current=0,
         total=len(pairs_to_process),
+        candidate_pairs_total=candidate_pair_count,
+        cached_pairs_skipped=cached_pair_count,
+        fresh_pairs_total=len(pairs_to_process),
+        pairwise_workers=max(1, min(PAIRWISE_WORKERS, len(pairs_to_process))),
     )
     max_workers = max(1, min(PAIRWISE_WORKERS, len(pairs_to_process)))
     completed = 0
@@ -948,6 +1159,7 @@ def ensure_pairwise_relationships(
         }
         for future in as_completed(future_map):
             left, right = future_map[future]
+            pair_details = _pair_progress_details(papers, left, right)
             try:
                 relationships = future.result()
                 save_pair_relationships(
@@ -957,38 +1169,147 @@ def ensure_pairwise_relationships(
                     manifest,
                     pairwise_signature=PAIRWISE_ANALYSIS_SIGNATURE,
                 )
+                pair_outcome = "succeeded"
+                relationship_count = len(relationships)
+                error_text = ""
+                debug_path = ""
             except Exception as exc:
-                failures.append(
-                    {
-                        "pair_key": pair_key(left, right),
-                        "paper_a_id": left,
-                        "paper_b_id": right,
-                        "error": str(exc),
-                    }
+                failure = _record_pair_failure(
+                    papers,
+                    left,
+                    right,
+                    exc,
+                    pair_phase="fresh",
                 )
+                failures.append(failure)
+                pair_outcome = "failed"
+                relationship_count = 0
+                error_text = failure["error"]
+                debug_path = failure.get("debug_path", "")
             completed += 1
             _emit_progress(
                 progress_callback,
                 stage="pairwise_progress",
-                message=f"Comparing with related papers ({completed} of {len(pairs_to_process)}).",
+                message="Completed a fresh paper comparison.",
                 progress=completed / len(pairs_to_process),
                 current=completed,
                 total=len(pairs_to_process),
-                pair_key=pair_key(left, right),
+                candidate_pairs_total=candidate_pair_count,
+                cached_pairs_skipped=cached_pair_count,
+                fresh_pairs_total=len(pairs_to_process),
+                pair_phase="fresh",
+                pair_outcome=pair_outcome,
+                relationship_count=relationship_count,
+                error=error_text,
+                debug_path=debug_path,
+                **pair_details,
             )
 
+    if failures and PAIRWISE_SERIAL_RETRY_ATTEMPTS > 0:
+        retry_queue = failures
+        for attempt in range(1, PAIRWISE_SERIAL_RETRY_ATTEMPTS + 1):
+            if not retry_queue:
+                break
+            _emit_progress(
+                progress_callback,
+                stage="pairwise_retry_start",
+                message=(
+                    f"Retrying {len(retry_queue)} incomplete paper comparisons "
+                    f"(pass {attempt} of {PAIRWISE_SERIAL_RETRY_ATTEMPTS})."
+                ),
+                progress=0.0,
+                current=0,
+                total=len(retry_queue),
+                retry_attempt=attempt,
+                retry_max_attempts=PAIRWISE_SERIAL_RETRY_ATTEMPTS,
+                retry_pairs_total=len(retry_queue),
+            )
+            remaining_failures: list[dict] = []
+            for index, failure in enumerate(retry_queue, start=1):
+                left = failure["paper_a_id"]
+                right = failure["paper_b_id"]
+                pair_details = _pair_progress_details(papers, left, right)
+                try:
+                    relationships = compare_papers(papers[left], papers[right])
+                    save_pair_relationships(
+                        left,
+                        right,
+                        relationships,
+                        manifest,
+                        pairwise_signature=PAIRWISE_ANALYSIS_SIGNATURE,
+                    )
+                    pair_outcome = "succeeded"
+                    relationship_count = len(relationships)
+                    error_text = ""
+                    debug_path = ""
+                except Exception as exc:
+                    failure = _record_pair_failure(
+                        papers,
+                        left,
+                        right,
+                        exc,
+                        pair_phase="retry",
+                        retry_attempt=attempt,
+                    )
+                    remaining_failures.append(failure)
+                    pair_outcome = "failed"
+                    relationship_count = 0
+                    error_text = failure["error"]
+                    debug_path = failure.get("debug_path", "")
+                _emit_progress(
+                    progress_callback,
+                    stage="pairwise_retry_progress",
+                    message="Completed a retry of a failed paper comparison.",
+                    progress=index / len(retry_queue),
+                    current=index,
+                    total=len(retry_queue),
+                    pair_phase="retry",
+                    pair_outcome=pair_outcome,
+                    relationship_count=relationship_count,
+                    retry_attempt=attempt,
+                    retry_max_attempts=PAIRWISE_SERIAL_RETRY_ATTEMPTS,
+                    retry_pairs_total=len(retry_queue),
+                    error=error_text,
+                    debug_path=debug_path,
+                    **pair_details,
+                )
+            retry_queue = remaining_failures
+        failures = retry_queue
+
+    successful_pairs_count = len(pairs_to_process) - len(failures)
     _emit_progress(
         progress_callback,
         stage="pairwise_complete",
-        message="Finished comparing with related papers.",
+        message=(
+            "Finished comparing related papers."
+            if not failures
+            else f"Finished comparing related papers; {len(failures)} pair(s) still failed."
+        ),
         progress=1.0,
-        current=len(pairs_to_process),
-        total=len(pairs_to_process),
+        current=candidate_pair_count,
+        total=candidate_pair_count,
+        candidate_pairs_total=candidate_pair_count,
+        cached_pairs_skipped=cached_pair_count,
+        fresh_pairs_total=len(pairs_to_process),
+        successful_pairs_count=successful_pairs_count,
+        failed_pairs_count=len(failures),
     )
     return load_all_pair_relationships(
         manifest,
         pairwise_signature=PAIRWISE_ANALYSIS_SIGNATURE,
     ), failures
+
+
+def compute_and_save_measures(
+    papers: dict[str, dict],
+    relationships: list[dict],
+    paper_edges: dict,
+) -> dict[str, dict]:
+    """Compute graph influence measures and persist them to measures.json."""
+    measures = compute_measures(papers, relationships, paper_edges)
+    from .cache import write_json
+    write_json(MEASURES_PATH, measures)
+    return measures
 
 
 def preprocess_corpus(
@@ -1099,6 +1420,11 @@ def preprocess_corpus(
 
     def _pairwise_progress(event: dict[str, Any]) -> None:
         pair_progress = event.get("progress", 0.0)
+        forwarded = {
+            key: value
+            for key, value in event.items()
+            if key not in {"stage", "message", "progress", "current", "total"}
+        }
         _emit_progress(
             progress_callback,
             stage=event.get("stage", "pairwise"),
@@ -1106,6 +1432,7 @@ def preprocess_corpus(
             progress=0.45 + (0.45 * pair_progress),
             current=event.get("current"),
             total=event.get("total"),
+            **forwarded,
         )
 
     relationships, pair_failures = ensure_pairwise_relationships(
@@ -1121,6 +1448,13 @@ def preprocess_corpus(
     )
     paper_edges = aggregate_paper_edges(relationships, papers)
     save_combined_dataset(papers, relationships, paper_edges, manifest)
+    compute_and_save_measures(papers, relationships, paper_edges)
+    pairwise_status = current_pairwise_status(
+        papers,
+        manifest,
+        paper_edges,
+        pairwise_signature=PAIRWISE_ANALYSIS_SIGNATURE,
+    )
     _emit_progress(
         progress_callback,
         stage="complete",
@@ -1138,6 +1472,10 @@ def preprocess_corpus(
         "paper_count": len(papers),
         "relationship_count": len(relationships),
         "edge_count": len(paper_edges),
+        "potential_pair_count": pairwise_status["potential_pair_count"],
+        "processed_pair_count": pairwise_status["processed_pair_count"],
+        "unprocessed_pair_count": pairwise_status["unprocessed_pair_count"],
+        "pairs_with_relationships_count": pairwise_status["pairs_with_relationships_count"],
     }
 
 
@@ -1223,10 +1561,14 @@ def merge_uploaded_paper(
 ) -> tuple[list[dict], dict[tuple[str, str], dict], list[dict]]:
     save_paper_record(paper, manifest, analysis_signature=PAPER_ANALYSIS_SIGNATURE)
     papers[paper["paper_id"]] = paper
-    only_pairs = [(paper["paper_id"], other_id) for other_id in papers if other_id != paper["paper_id"]]
 
     def _pairwise_progress(event: dict[str, Any]) -> None:
         pair_progress = event.get("progress", 0.0)
+        forwarded = {
+            key: value
+            for key, value in event.items()
+            if key not in {"stage", "message", "progress", "current", "total"}
+        }
         _emit_progress(
             progress_callback,
             stage=event.get("stage", "pairwise"),
@@ -1234,6 +1576,7 @@ def merge_uploaded_paper(
             progress=0.45 + (0.45 * pair_progress),
             current=event.get("current"),
             total=event.get("total"),
+            **forwarded,
         )
 
     _emit_progress(
@@ -1246,7 +1589,6 @@ def merge_uploaded_paper(
     relationships, pair_failures = ensure_pairwise_relationships(
         papers,
         manifest,
-        only_pairs=only_pairs,
         progress_callback=_pairwise_progress,
     )
     _emit_progress(
@@ -1258,6 +1600,7 @@ def merge_uploaded_paper(
     )
     paper_edges = aggregate_paper_edges(relationships, papers)
     save_combined_dataset(papers, relationships, paper_edges, manifest)
+    compute_and_save_measures(papers, relationships, paper_edges)
     _emit_progress(
         progress_callback,
         stage="complete",
