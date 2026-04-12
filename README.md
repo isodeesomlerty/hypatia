@@ -34,6 +34,13 @@ cp .env.example .env
 python scripts/preprocess_corpus.py
 ```
 
+If you already have cached paper JSONs in `data/cache/papers/` and want to register any orphaned ones,
+compute the missing pairwise relationships, and rebuild the graph snapshots:
+
+```bash
+make refresh
+```
+
 5. Launch the app:
 
 ```bash

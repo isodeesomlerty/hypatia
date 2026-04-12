@@ -37,6 +37,7 @@ from research_graph.pipeline import (  # noqa: E402
     merge_uploaded_paper,
     search_claims,
 )
+from research_graph.measures import compute_measures  # noqa: E402
 from research_graph.ui import (  # noqa: E402
     build_processing_card_markup,
     build_progress_timeline_markup,
@@ -46,6 +47,7 @@ from research_graph.ui import (  # noqa: E402
     render_detail_panel,
     render_flow_gap,
     render_hero,
+    render_leaderboard,
     render_metric_cards,
     render_search_summary,
     reset_view,
@@ -193,7 +195,7 @@ def main() -> None:
             highlight_node_ids=highlighted,
             focus_node_ids=highlighted,
             reset_token=st.session_state.reset_token,
-            height=760,
+            height=900,
         )
         if selection != st.session_state.selected_graph_item:
             st.session_state.selected_graph_item = selection
@@ -492,15 +494,25 @@ def main() -> None:
                 clear_upload_widget()
                 st.rerun()
 
+    measures = compute_measures(st.session_state.papers, st.session_state.paper_edges)
+
     with detail_col:
         render_search_summary(st.session_state.search_state)
-        render_detail_panel(
-            st.session_state.selected_graph_item,
-            st.session_state.papers,
-            st.session_state.paper_edges,
-            st.session_state.relationship_index,
-            st.session_state.failed_pairs,
+        nothing_selected = not (
+            st.session_state.selected_graph_item.get("type") in {"node", "edge"}
+            and st.session_state.selected_graph_item.get("id")
         )
+        if nothing_selected:
+            st.markdown('<div class="rg-panel-title">Paper Priority</div>', unsafe_allow_html=True)
+            render_leaderboard(st.session_state.papers, measures)
+        else:
+            render_detail_panel(
+                st.session_state.selected_graph_item,
+                st.session_state.papers,
+                st.session_state.paper_edges,
+                st.session_state.relationship_index,
+                st.session_state.failed_pairs,
+            )
 
 
 if __name__ == "__main__":

@@ -718,6 +718,53 @@ def _normalize_health_result(health_payload: dict, paper_id: str) -> dict:
     }
 
 
+def _normalize_cached_paper_record(payload: dict, cache_path: Path) -> dict | None:
+    if not isinstance(payload, dict):
+        return None
+
+    normalized = dict(payload)
+    source_hash = str(normalized.get("source_hash") or cache_path.stem).strip()
+    if not source_hash:
+        return None
+
+    title = str(normalized.get("title") or cache_path.stem).strip() or cache_path.stem
+    year = normalized.get("year")
+    if isinstance(year, str) and year.isdigit():
+        year = int(year)
+    if not isinstance(year, int) or year < 1800 or year > 2100:
+        year = None
+
+    authors = normalized.get("authors") or []
+    if isinstance(authors, str):
+        authors = [authors]
+    if not isinstance(authors, list):
+        authors = []
+
+    paper_id = str(normalized.get("paper_id") or make_paper_id(title, source_hash, year)).strip()
+    if not paper_id:
+        return None
+
+    normalized["source_hash"] = source_hash
+    normalized["source_filename"] = (
+        str(normalized.get("source_filename") or f"{source_hash}.pdf").strip()
+        or f"{source_hash}.pdf"
+    )
+    normalized["title"] = title
+    normalized["authors"] = [
+        author.strip()
+        for author in authors
+        if isinstance(author, str) and author.strip()
+    ]
+    normalized["year"] = year
+    normalized["paper_id"] = paper_id
+    normalized["claims"] = _normalize_claims(normalized.get("claims", []), paper_id)
+    normalized["health_score"] = _normalize_health_result(
+        normalized.get("health_score", {}),
+        paper_id,
+    )
+    return normalized
+
+
 def _build_paper_record(
     *,
     pdf_path: Path,
@@ -1350,6 +1397,148 @@ def preprocess_corpus(
         "processed_papers": processed,
         "skipped_papers": skipped,
         "failed_papers": failed,
+        "pair_failures": pair_failures,
+        "paper_count": len(papers),
+        "relationship_count": len(relationships),
+        "edge_count": len(paper_edges),
+    }
+
+
+def refresh_cached_corpus(
+    progress_callback: ProgressCallback | None = None,
+    *,
+    include_pairwise: bool = True,
+) -> dict:
+    ensure_project_dirs()
+    manifest = load_manifest()
+    paper_cache_dir = CACHE_DIR / "papers"
+    cached_paper_paths = sorted(paper_cache_dir.glob("*.json"))
+
+    _emit_progress(
+        progress_callback,
+        stage="refresh_scan_cached_papers",
+        message=f"Scanning {paper_cache_dir} for cached paper JSONs.",
+        progress=0.0,
+        current=0,
+        total=len(cached_paper_paths),
+    )
+
+    imported_cached_papers = 0
+    invalid_cached_papers = 0
+    for cache_path in cached_paper_paths:
+        try:
+            with cache_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            invalid_cached_papers += 1
+            continue
+
+        paper = _normalize_cached_paper_record(payload, cache_path)
+        if not paper:
+            invalid_cached_papers += 1
+            continue
+
+        source_hash = paper["source_hash"]
+        expected_cache_path = str((paper_cache_dir / f"{source_hash}.json").relative_to(CACHE_DIR))
+        existing_entry = manifest.get("papers_by_hash", {}).get(source_hash)
+        needs_registration = (
+            not existing_entry
+            or existing_entry.get("analysis_signature") != PAPER_ANALYSIS_SIGNATURE
+            or existing_entry.get("paper_id") != paper["paper_id"]
+            or existing_entry.get("paper_cache_path") != expected_cache_path
+        )
+        if not needs_registration:
+            continue
+
+        save_paper_record(
+            paper,
+            manifest,
+            analysis_signature=PAPER_ANALYSIS_SIGNATURE,
+        )
+        imported_cached_papers += 1
+
+    _emit_progress(
+        progress_callback,
+        stage="refresh_register_cached_papers",
+        message=(
+            f"Registered {imported_cached_papers} cached paper JSONs"
+            f" ({invalid_cached_papers} invalid skipped)."
+        ),
+        progress=0.45,
+        current=imported_cached_papers,
+        total=len(cached_paper_paths),
+    )
+
+    papers = load_all_paper_records(
+        manifest,
+        analysis_signature=PAPER_ANALYSIS_SIGNATURE,
+    )
+
+    if include_pairwise:
+
+        def _pairwise_progress(event: dict[str, Any]) -> None:
+            pair_progress = event.get("progress", 0.0)
+            forwarded = {
+                key: value
+                for key, value in event.items()
+                if key not in {"stage", "message", "progress", "current", "total"}
+            }
+            _emit_progress(
+                progress_callback,
+                stage=event.get("stage", "pairwise"),
+                message=event.get("message", "Refreshing paper comparisons."),
+                progress=0.45 + (0.45 * pair_progress),
+                current=event.get("current"),
+                total=event.get("total"),
+                **forwarded,
+            )
+
+        relationships, pair_failures = ensure_pairwise_relationships(
+            papers,
+            manifest,
+            execution_context="batch",
+            progress_callback=_pairwise_progress,
+        )
+    else:
+        relationships = load_all_pair_relationships(
+            manifest,
+            pairwise_signature=PAIRWISE_ANALYSIS_SIGNATURE,
+        )
+        pair_failures = []
+        _emit_progress(
+            progress_callback,
+            stage="pairwise_complete",
+            message="Skipping fresh pairwise analysis and using cached claim relationships only.",
+            progress=0.9,
+            current=len(relationships),
+            total=len(relationships),
+            candidate_pairs_total=0,
+            cached_pairs_skipped=0,
+            fresh_pairs_total=0,
+            successful_pairs_count=0,
+            failed_pairs_count=0,
+        )
+
+    _emit_progress(
+        progress_callback,
+        stage="aggregate_edges",
+        message="Aggregating claim-level relationships into graph edges.",
+        progress=0.94,
+    )
+    paper_edges = aggregate_paper_edges(relationships, papers)
+    save_combined_dataset(papers, relationships, paper_edges, manifest)
+    _emit_progress(
+        progress_callback,
+        stage="complete",
+        message="Finished refreshing the cached corpus.",
+        progress=1.0,
+        current=len(papers),
+        total=len(papers),
+    )
+
+    return {
+        "imported_cached_papers": imported_cached_papers,
+        "invalid_cached_papers": invalid_cached_papers,
         "pair_failures": pair_failures,
         "paper_count": len(papers),
         "relationship_count": len(relationships),

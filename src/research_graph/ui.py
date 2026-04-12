@@ -1519,6 +1519,159 @@ def render_edge_details(
                 )
 
 
+_HEALTH_DOT_COLOR = {"healthy": "#5E897D", "caution": "#B78345", "concern": "#AB5E51"}
+_HEALTH_LABEL = {"healthy": "Healthy", "caution": "Caution", "concern": "Concern"}
+_HEALTH_BADGE_BG = {
+    "healthy": "rgba(94, 137, 125, 0.12)",
+    "caution": "rgba(183, 131, 69, 0.12)",
+    "concern": "rgba(171, 94, 81, 0.12)",
+}
+
+
+def render_leaderboard(
+    papers: dict[str, dict],
+    measures: dict[str, dict],
+) -> None:
+    """Render a prioritised read-next list of up to 5 papers."""
+    if not papers:
+        st.markdown(
+            """
+            <div class="rg-empty-card">
+              <h3 class="rg-detail-heading" style="font-size:1.45rem;">No papers yet</h3>
+              <p class="rg-help-text" style="margin-top:0.7rem;">
+                Add papers to your research map to see which ones are worth
+                reading first.
+              </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
+    ranked = sorted(
+        [(pid, measures.get(pid, {})) for pid in papers],
+        key=lambda x: x[1].get("priority_score", 0.0),
+        reverse=True,
+    )[:5]
+
+    items_html = ""
+    for rank, (pid, m) in enumerate(ranked, 1):
+        paper = papers[pid]
+        raw_title = paper.get("title", "Untitled paper")
+        year = str(paper.get("year") or "n.d.")
+        authors = paper.get("authors", [])
+        author_line = ", ".join(authors[:2]) + (" et al." if len(authors) > 2 else "")
+
+        health = paper.get("health_score", {}).get("overall_score", "caution")
+        dot_color = _HEALTH_DOT_COLOR.get(health, "#B78345")
+        badge_label = _HEALTH_LABEL.get(health, "Caution")
+        badge_bg = _HEALTH_BADGE_BG.get(health, "rgba(183, 131, 69, 0.12)")
+
+        connections = m.get("degree", 0)
+        conn_text = f"{connections} connection" if connections == 1 else f"{connections} connections"
+
+        items_html += f"""
+        <div class="rg-rl-item">
+          <span class="rg-rl-num">{rank}</span>
+          <div class="rg-rl-body">
+            <div class="rg-rl-title" title="{escape(raw_title)}">{escape(raw_title)}</div>
+            <div class="rg-rl-meta">
+              {escape(author_line + (" · " if author_line else "") + year)}
+              <span class="rg-rl-conn">{conn_text}</span>
+            </div>
+            <span class="rg-rl-badge" style="color:{dot_color};background:{badge_bg};">
+              <span class="rg-rl-dot" style="background:{dot_color};"></span>
+              {escape(badge_label)}
+            </span>
+          </div>
+        </div>
+        """
+
+    st.markdown(
+        f"""
+        <style>
+        .rg-read-list {{
+          display: flex;
+          flex-direction: column;
+          gap: 0;
+        }}
+        .rg-rl-intro {{
+          font-size: 0.82rem;
+          color: var(--rg-muted);
+          margin-bottom: 1rem;
+          line-height: 1.5;
+        }}
+        .rg-rl-item {{
+          display: flex;
+          gap: 0.75rem;
+          align-items: flex-start;
+          padding: 0.85rem 0;
+          border-bottom: 1px solid rgba(53, 38, 24, 0.07);
+        }}
+        .rg-rl-item:last-child {{ border-bottom: none; }}
+        .rg-rl-num {{
+          flex-shrink: 0;
+          width: 1.4rem;
+          font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+          font-size: 1.15rem;
+          color: rgba(53, 38, 24, 0.25);
+          line-height: 1.3;
+          text-align: right;
+        }}
+        .rg-rl-body {{
+          display: flex;
+          flex-direction: column;
+          gap: 0.22rem;
+          min-width: 0;
+        }}
+        .rg-rl-title {{
+          font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+          font-size: 0.9rem;
+          color: var(--rg-ink);
+          line-height: 1.35;
+        }}
+        .rg-rl-meta {{
+          font-size: 0.77rem;
+          color: var(--rg-muted);
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          flex-wrap: wrap;
+        }}
+        .rg-rl-conn {{
+          font-size: 0.74rem;
+          color: rgba(53, 38, 24, 0.38);
+        }}
+        .rg-rl-badge {{
+          display: inline-flex;
+          align-items: center;
+          gap: 0.3rem;
+          padding: 0.18rem 0.5rem;
+          border-radius: 999px;
+          font-size: 0.72rem;
+          font-weight: 600;
+          letter-spacing: 0.04em;
+          width: fit-content;
+        }}
+        .rg-rl-dot {{
+          width: 5px;
+          height: 5px;
+          border-radius: 50%;
+          flex-shrink: 0;
+        }}
+        </style>
+        <div class="rg-read-list">
+          <p class="rg-rl-intro">
+            Papers ranked by methodological quality first, then by influence
+            across the relationship network.
+          </p>
+          {items_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_detail_panel(
     selected_graph_item: dict,
     papers: dict[str, dict],

@@ -185,9 +185,11 @@ def build_graph_payload(
                 "shape": "dot",
                 "size": 28,
                 "font": {
-                    "size": 16 if not dimmed else 13,
+                    "size": 20 if not dimmed else 17,
                     "color": "#221A14" if not dimmed else "#A69A8B",
                     "face": "Iowan Old Style, Palatino Linotype, Georgia",
+                    "strokeWidth": 2,
+                    "strokeColor": "#FFF8EF",
                 },
                 "color": _node_color(base_color, dimmed),
                 "physics": True,

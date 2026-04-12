@@ -19,7 +19,7 @@ def render_graph_component(
     highlight_node_ids: list[str] | None,
     focus_node_ids: list[str] | None,
     reset_token: int,
-    height: int = 760,
+    height: int = 9000,
     key: str = "research_graph_network",
 ):
     return _GRAPH_COMPONENT(
@@ -32,4 +32,3 @@ def render_graph_component(
         default={"type": "background", "id": None},
         key=key,
     )
-

@@ -56,6 +56,9 @@
       let network = null;
       let lastSelection = JSON.stringify({ type: "background", id: null });
       let lastResetToken = null;
+      let fitSequence = 0;
+      const WHOLE_GRAPH_ZOOM_OUT = 0.8;
+      const FOCUS_GRAPH_ZOOM_OUT = 0.9;
 
       function sendMessage(type, payload) {
         const message = Object.assign(
@@ -108,12 +111,53 @@
         });
       }
 
+      function fitGraph(nodeIds, animated = true, zoomOutFactor = WHOLE_GRAPH_ZOOM_OUT) {
+        if (!network) {
+          return;
+        }
+
+        const targetNodes = Array.isArray(nodeIds) && nodeIds.length > 0 ? nodeIds : undefined;
+        network.fit({
+          animation: false,
+          nodes: targetNodes,
+        });
+
+        const position = network.getViewPosition();
+        const scale = network.getScale();
+        network.moveTo({
+          position,
+          scale: Math.max(scale * zoomOutFactor, 0.05),
+          animation: animated
+            ? { duration: 450, easingFunction: "easeInOutQuad" }
+            : false,
+        });
+      }
+
+      function scheduleFitAfterStabilization(
+        nodeIds,
+        animated = true,
+        zoomOutFactor = WHOLE_GRAPH_ZOOM_OUT
+      ) {
+        if (!network) {
+          return;
+        }
+
+        fitSequence += 1;
+        const currentFitSequence = fitSequence;
+        network.once("stabilized", () => {
+          if (currentFitSequence !== fitSequence) {
+            return;
+          }
+          fitGraph(nodeIds, animated, zoomOutFactor);
+        });
+      }
+
       function ensureNetwork(height) {
         if (network) {
           return;
         }
 
-        root.style.height = `${height || 760}px`;
+        root.style.height = `${height || 900}px`;
         nodeDataSet = new vis.DataSet([]);
         edgeDataSet = new vis.DataSet([]);
         network = new vis.Network(
@@ -130,14 +174,15 @@
             },
             physics: {
               stabilization: {
-                iterations: 180,
-                fit: true,
+                iterations: 220,
+                fit: false,
               },
               barnesHut: {
-                gravitationalConstant: -4200,
-                springLength: 165,
-                springConstant: 0.02,
+                gravitationalConstant: -80000,
+                springLength: 760,
+                springConstant: 0.015,
                 damping: 0.22,
+                avoidOverlap: 0.35,
               },
             },
             nodes: {
@@ -164,8 +209,9 @@
           }
         });
 
-        network.once("stabilizationIterationsDone", () => {
-          setFrameHeight((height || 760) + 8);
+        network.once("stabilized", () => {
+          fitGraph([], false, WHOLE_GRAPH_ZOOM_OUT);
+          setFrameHeight((height || 900) + 8);
         });
       }
 
@@ -174,7 +220,7 @@
         const edges = Array.isArray(args.edges) ? args.edges : [];
         const focusNodeIds = Array.isArray(args.focus_node_ids) ? args.focus_node_ids : [];
         const resetToken = args.reset_token;
-        const height = Number(args.height || 760);
+        const height = Number(args.height || 900);
 
         ensureNetwork(height);
 
@@ -189,21 +235,13 @@
           network.unselectAll();
           lastSelection = JSON.stringify({ type: "background", id: null });
           setComponentValue({ type: "background", id: null });
-          if (focusNodeIds.length > 0) {
-            network.fit({
-              nodes: focusNodeIds,
-              animation: { duration: 600, easingFunction: "easeInOutQuad" },
-            });
-          } else {
-            network.fit({
-              animation: { duration: 400, easingFunction: "easeInOutQuad" },
-            });
-          }
+          scheduleFitAfterStabilization(
+            focusNodeIds,
+            false,
+            focusNodeIds.length > 0 ? FOCUS_GRAPH_ZOOM_OUT : WHOLE_GRAPH_ZOOM_OUT
+          );
         } else if (focusNodeIds.length > 0) {
-          network.fit({
-            nodes: focusNodeIds,
-            animation: { duration: 600, easingFunction: "easeInOutQuad" },
-          });
+          scheduleFitAfterStabilization(focusNodeIds, true, FOCUS_GRAPH_ZOOM_OUT);
         }
 
         setFrameHeight(height + 8);
@@ -217,7 +255,7 @@
       });
 
       setComponentReady();
-      setFrameHeight(768);
+      setFrameHeight(908);
     </script>
   </body>
 </html>

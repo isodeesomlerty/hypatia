@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "additionalDirectories": [
+      "/Users/danielseymour/Developer/hypatia/src/research_graph"
+    ],
+    "allow": [
+      "Bash(python -c ':*)"
+    ]
+  }
+}
