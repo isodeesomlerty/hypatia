@@ -16,6 +16,7 @@ import streamlit as st  # noqa: E402
 
 from research_graph.cache import (  # noqa: E402
     clear_cached_corpus,
+    current_pairwise_status,
     load_cached_dataset,
     remove_pair_relationships_for_paper,
     remove_paper_record,
@@ -94,6 +95,19 @@ def sync_dataset(
         pairwise_signature=PAIRWISE_ANALYSIS_SIGNATURE,
     )
     st.session_state.data_loaded = True
+
+
+def pairwise_status_summary(
+    papers: dict[str, dict],
+    manifest: dict,
+    paper_edges: dict[tuple[str, str], dict],
+) -> dict[str, int]:
+    return current_pairwise_status(
+        papers,
+        manifest,
+        paper_edges,
+        pairwise_signature=PAIRWISE_ANALYSIS_SIGNATURE,
+    )
 
 
 def main() -> None:
@@ -277,7 +291,17 @@ def main() -> None:
                             st.session_state.manifest,
                         )
                         st.session_state.selected_graph_item = {"type": "node", "id": paper["paper_id"]}
-                        st.session_state.upload_notice = f"Added {paper['title']}."
+                        pairwise_status = pairwise_status_summary(
+                            papers,
+                            st.session_state.manifest,
+                            paper_edges,
+                        )
+                        st.session_state.upload_notice = (
+                            f"Added {paper['title']}. "
+                            f"Hypatia has processed {pairwise_status['processed_pair_count']} of "
+                            f"{pairwise_status['potential_pair_count']} possible paper comparisons, "
+                            f"with {pairwise_status['paper_edge_count']} visible paper relationships."
+                        )
                         if pair_failures:
                             st.session_state.upload_notice += (
                                 f" {_pending_relationship_message(len(pair_failures))}"
@@ -374,7 +398,17 @@ def main() -> None:
                         st.session_state.manifest,
                     )
                     st.session_state.selected_graph_item = {"type": "node", "id": paper["paper_id"]}
-                    st.session_state.upload_notice = f"Added {paper['title']}."
+                    pairwise_status = pairwise_status_summary(
+                        papers,
+                        st.session_state.manifest,
+                        paper_edges,
+                    )
+                    st.session_state.upload_notice = (
+                        f"Added {paper['title']}. "
+                        f"Hypatia has processed {pairwise_status['processed_pair_count']} of "
+                        f"{pairwise_status['potential_pair_count']} possible paper comparisons, "
+                        f"with {pairwise_status['paper_edge_count']} visible paper relationships."
+                    )
                     if pair_failures:
                         st.session_state.upload_notice += (
                             f" {_pending_relationship_message(len(pair_failures))}"

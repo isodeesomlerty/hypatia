@@ -130,6 +130,47 @@ def pair_cache_path_from_key(key: str) -> Path:
     return PAIR_CACHE_DIR / pair_cache_filename(left, right)
 
 
+def current_pairwise_status(
+    papers: dict[str, dict],
+    manifest: dict,
+    paper_edges: dict[tuple[str, str], dict] | None = None,
+    pairwise_signature: str | None = None,
+) -> dict[str, int]:
+    paper_ids = sorted(papers)
+    potential_pair_keys = {
+        pair_key(paper_ids[index], paper_ids[other_index])
+        for index in range(len(paper_ids))
+        for other_index in range(index + 1, len(paper_ids))
+    }
+
+    processed_pair_count = 0
+    pairs_with_relationships_count = 0
+    processed_pairs = manifest.get("processed_pairs", {})
+    for key in potential_pair_keys:
+        entry = processed_pairs.get(key)
+        if not entry:
+            continue
+        if pairwise_signature and entry.get("pairwise_signature") != pairwise_signature:
+            continue
+        rel_path = entry.get("pair_cache_path")
+        if not rel_path or not (CACHE_DIR / rel_path).exists():
+            continue
+        processed_pair_count += 1
+        if entry.get("relationship_count", 0) > 0:
+            pairs_with_relationships_count += 1
+
+    potential_pair_count = len(potential_pair_keys)
+    paper_edge_count = len(paper_edges or {})
+    return {
+        "paper_count": len(papers),
+        "potential_pair_count": potential_pair_count,
+        "processed_pair_count": processed_pair_count,
+        "unprocessed_pair_count": max(0, potential_pair_count - processed_pair_count),
+        "pairs_with_relationships_count": pairs_with_relationships_count,
+        "paper_edge_count": paper_edge_count,
+    }
+
+
 def save_paper_record(paper: dict, manifest: dict, analysis_signature: str | None = None) -> None:
     source_hash = paper["source_hash"]
     cache_path = paper_cache_path_for_hash(source_hash)

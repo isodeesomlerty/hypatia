@@ -1073,22 +1073,38 @@ def ensure_pairwise_relationships(
     pairs_to_process = [
         pair for pair in candidate_pairs if pair_key(pair[0], pair[1]) not in existing_pairs
     ]
+    candidate_pair_count = len(candidate_pairs)
+    cached_pair_count = candidate_pair_count - len(pairs_to_process)
 
     failures: list[dict] = []
     if not pairs_to_process:
         _emit_progress(
             progress_callback,
             stage="pairwise_complete",
-            message="No new paper relationships were needed.",
+            message=(
+                "All candidate paper comparisons were already cached; skipping fresh pairwise analysis."
+                if candidate_pair_count
+                else "No new paper relationships were needed."
+            ),
             progress=1.0,
-            current=0,
-            total=0,
+            current=candidate_pair_count,
+            total=candidate_pair_count,
+            candidate_pairs_total=candidate_pair_count,
+            cached_pairs_skipped=cached_pair_count,
+            fresh_pairs_total=0,
+            successful_pairs_count=0,
+            failed_pairs_count=0,
+            skipped_all_cached=bool(candidate_pair_count),
         )
         return load_all_pair_relationships(
             manifest,
             pairwise_signature=PAIRWISE_ANALYSIS_SIGNATURE,
         ), failures
 
+    if execution_context == "upload":
+        max_workers = 1
+    else:
+        max_workers = max(1, min(PAIRWISE_WORKERS, len(pairs_to_process)))
     _emit_progress(
         progress_callback,
         stage="pairwise_start",
@@ -1096,11 +1112,11 @@ def ensure_pairwise_relationships(
         progress=0.0,
         current=0,
         total=len(pairs_to_process),
+        candidate_pairs_total=candidate_pair_count,
+        cached_pairs_skipped=cached_pair_count,
+        fresh_pairs_total=len(pairs_to_process),
+        pairwise_workers=max_workers,
     )
-    if execution_context == "upload":
-        max_workers = 1
-    else:
-        max_workers = max(1, min(PAIRWISE_WORKERS, len(pairs_to_process)))
     completed = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_map = {
@@ -1109,8 +1125,12 @@ def ensure_pairwise_relationships(
         }
         for future in as_completed(future_map):
             left, right = future_map[future]
+            pair_outcome = "succeeded"
+            relationship_count = 0
+            error_text = ""
             try:
                 relationships = future.result()
+                relationship_count = len(relationships)
                 save_pair_relationships(
                     left,
                     right,
@@ -1138,6 +1158,8 @@ def ensure_pairwise_relationships(
                         "retryable": retryable,
                     }
                 )
+                pair_outcome = "failed"
+                error_text = str(exc)
             completed += 1
             _emit_progress(
                 progress_callback,
@@ -1147,15 +1169,30 @@ def ensure_pairwise_relationships(
                 current=completed,
                 total=len(pairs_to_process),
                 pair_key=pair_key(left, right),
+                paper_a_title=papers.get(left, {}).get("title", left),
+                paper_b_title=papers.get(right, {}).get("title", right),
+                pair_phase="fresh",
+                pair_outcome=pair_outcome,
+                relationship_count=relationship_count,
+                error=error_text,
+                candidate_pairs_total=candidate_pair_count,
+                cached_pairs_skipped=cached_pair_count,
+                fresh_pairs_total=len(pairs_to_process),
             )
 
+    successful_pairs_count = len(pairs_to_process) - len(failures)
     _emit_progress(
         progress_callback,
         stage="pairwise_complete",
         message="Finished comparing with related papers.",
         progress=1.0,
-        current=len(pairs_to_process),
-        total=len(pairs_to_process),
+        current=candidate_pair_count,
+        total=candidate_pair_count,
+        candidate_pairs_total=candidate_pair_count,
+        cached_pairs_skipped=cached_pair_count,
+        fresh_pairs_total=len(pairs_to_process),
+        successful_pairs_count=successful_pairs_count,
+        failed_pairs_count=len(failures),
     )
     return load_all_pair_relationships(
         manifest,
@@ -1271,6 +1308,11 @@ def preprocess_corpus(
 
     def _pairwise_progress(event: dict[str, Any]) -> None:
         pair_progress = event.get("progress", 0.0)
+        forwarded = {
+            key: value
+            for key, value in event.items()
+            if key not in {"stage", "message", "progress", "current", "total"}
+        }
         _emit_progress(
             progress_callback,
             stage=event.get("stage", "pairwise"),
@@ -1278,6 +1320,7 @@ def preprocess_corpus(
             progress=0.45 + (0.45 * pair_progress),
             current=event.get("current"),
             total=event.get("total"),
+            **forwarded,
         )
 
     relationships, pair_failures = ensure_pairwise_relationships(
@@ -1400,6 +1443,11 @@ def merge_uploaded_paper(
 
     def _pairwise_progress(event: dict[str, Any]) -> None:
         pair_progress = event.get("progress", 0.0)
+        forwarded = {
+            key: value
+            for key, value in event.items()
+            if key not in {"stage", "message", "progress", "current", "total"}
+        }
         _emit_progress(
             progress_callback,
             stage=event.get("stage", "pairwise"),
@@ -1407,6 +1455,7 @@ def merge_uploaded_paper(
             progress=0.45 + (0.45 * pair_progress),
             current=event.get("current"),
             total=event.get("total"),
+            **forwarded,
         )
 
     _emit_progress(
