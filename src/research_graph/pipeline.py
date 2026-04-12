@@ -23,6 +23,7 @@ from .cache import (
     load_manifest,
     make_paper_id,
     pair_key,
+    record_failed_pair,
     record_failed_file,
     save_combined_dataset,
     save_pair_relationships,
@@ -38,6 +39,8 @@ from .config import (
     EXTRACTION_WORKERS,
     FILES_API_BETA,
     PAIRWISE_WORKERS,
+    PAIRWISE_MAX_TOKENS,
+    PAIRWISE_RETRY_MAX_TOKENS,
     PAPER_ANALYSIS_INPUT_MODE,
     PAPER_ANALYSIS_MODEL,
     PAPER_ANALYSIS_PDF_PAGE_THRESHOLD,
@@ -379,6 +382,28 @@ def _post_message(
     timeout_seconds: int,
     include_files_beta: bool = False,
 ) -> dict:
+    parsed = _post_message_payload(
+        model=model,
+        system_prompt=system_prompt,
+        content=content,
+        schema=schema,
+        max_tokens=max_tokens,
+        timeout_seconds=timeout_seconds,
+        include_files_beta=include_files_beta,
+    )
+    return json.loads(_parse_message_text(parsed))
+
+
+def _post_message_payload(
+    *,
+    model: str,
+    system_prompt: str,
+    content: list[dict[str, Any]],
+    schema: dict[str, Any],
+    max_tokens: int,
+    timeout_seconds: int,
+    include_files_beta: bool = False,
+) -> dict:
     payload = {
         "model": model,
         "max_tokens": max_tokens,
@@ -399,8 +424,7 @@ def _post_message(
             timeout=timeout_seconds,
         )
     )
-    parsed = response.json()
-    return json.loads(_parse_message_text(parsed))
+    return response.json()
 
 
 def _upload_pdf_to_files_api(pdf_path: Path) -> dict:
@@ -678,6 +702,25 @@ def _analyze_text_document(text: str, source_name: str) -> dict:
     return payload
 
 
+def _pairwise_response_payload(user_prompt: str, max_tokens: int) -> tuple[str, dict[str, Any]]:
+    response_payload = _post_message_payload(
+        model=RELATIONSHIP_MODEL,
+        system_prompt=PAIRWISE_RELATIONSHIP_SYSTEM_PROMPT,
+        content=[{"type": "text", "text": user_prompt}],
+        schema=RELATIONSHIP_SCHEMA,
+        max_tokens=max_tokens,
+        timeout_seconds=REQUEST_TIMEOUT_SECONDS,
+        include_files_beta=False,
+    )
+    response_text = _parse_message_text(response_payload)
+    metadata = {
+        "stop_reason": response_payload.get("stop_reason"),
+        "usage": response_payload.get("usage", {}),
+        "max_tokens": max_tokens,
+    }
+    return response_text, metadata
+
+
 def _analyze_paper_via_text(
     *,
     pdf_path: Path,
@@ -868,16 +911,37 @@ def compare_papers(paper_a: dict, paper_b: dict) -> list[dict]:
         f'Paper B: "{paper_b["title"]}"\n'
         f"Claims from Paper B:\n{json.dumps(paper_b.get('claims', []), ensure_ascii=False)}"
     )
-    payload = _post_message(
-        model=RELATIONSHIP_MODEL,
-        system_prompt=PAIRWISE_RELATIONSHIP_SYSTEM_PROMPT,
-        content=[{"type": "text", "text": user_prompt}],
-        schema=RELATIONSHIP_SCHEMA,
-        max_tokens=2048,
-        timeout_seconds=REQUEST_TIMEOUT_SECONDS,
-        include_files_beta=False,
-    )
-    validate_payload("relationships", payload)
+    token_attempts = [PAIRWISE_MAX_TOKENS]
+    if PAIRWISE_RETRY_MAX_TOKENS not in token_attempts:
+        token_attempts.append(PAIRWISE_RETRY_MAX_TOKENS)
+
+    last_error: Exception | None = None
+    for attempt_index, max_tokens in enumerate(token_attempts):
+        response_text, metadata = _pairwise_response_payload(user_prompt, max_tokens)
+        stop_reason = metadata.get("stop_reason")
+        try:
+            payload = json.loads(response_text)
+            validate_payload("relationships", payload)
+        except (json.JSONDecodeError, ValueError) as exc:
+            last_error = exc
+            if stop_reason == "max_tokens" and attempt_index < len(token_attempts) - 1:
+                continue
+            if stop_reason == "max_tokens":
+                raise ClaudeAPIError(
+                    "Hypatia ran out of room while comparing these papers."
+                ) from exc
+            raise ClaudeAPIError(f"Pairwise comparison returned invalid structured output: {exc}") from exc
+
+        if stop_reason == "max_tokens":
+            if attempt_index < len(token_attempts) - 1:
+                continue
+            raise ClaudeAPIError("Hypatia ran out of room while comparing these papers.")
+
+        break
+    else:
+        if last_error is not None:
+            raise ClaudeAPIError(str(last_error)) from last_error
+        raise ClaudeAPIError("Pairwise comparison failed.")
 
     cleaned: list[dict] = []
     for relationship in payload.get("relationships", []):
@@ -958,6 +1022,7 @@ def ensure_pairwise_relationships(
                     pairwise_signature=PAIRWISE_ANALYSIS_SIGNATURE,
                 )
             except Exception as exc:
+                record_failed_pair(left, right, str(exc), manifest)
                 failures.append(
                     {
                         "pair_key": pair_key(left, right),

@@ -71,6 +71,7 @@ def load_manifest() -> dict:
     normalized.update(manifest)
     normalized["papers_by_hash"] = dict(manifest.get("papers_by_hash", {}))
     normalized["processed_pairs"] = dict(manifest.get("processed_pairs", {}))
+    normalized["failed_pairs"] = dict(manifest.get("failed_pairs", {}))
     normalized["failed_files"] = dict(manifest.get("failed_files", {}))
     return normalized
 
@@ -173,6 +174,22 @@ def save_pair_relationships(
     }
     if pairwise_signature:
         manifest["processed_pairs"][key]["pairwise_signature"] = pairwise_signature
+    manifest.get("failed_pairs", {}).pop(key, None)
+
+
+def record_failed_pair(
+    paper_a_id: str,
+    paper_b_id: str,
+    error: str,
+    manifest: dict,
+) -> None:
+    key = pair_key(paper_a_id, paper_b_id)
+    manifest.setdefault("failed_pairs", {})[key] = {
+        "paper_a_id": min(paper_a_id, paper_b_id),
+        "paper_b_id": max(paper_a_id, paper_b_id),
+        "error": error,
+        "updated_at": utc_now_iso(),
+    }
 
 
 def remove_paper_record(paper: dict, manifest: dict) -> None:
@@ -197,6 +214,11 @@ def remove_pair_relationships_for_paper(paper_id: str, manifest: dict) -> None:
         rel_path = entry.get("pair_cache_path")
         if rel_path:
             _delete_path(CACHE_DIR / rel_path)
+    failed_pairs = manifest.get("failed_pairs", {})
+    for key in list(failed_pairs):
+        if paper_id not in key.split("||", maxsplit=1):
+            continue
+        failed_pairs.pop(key, None)
 
 
 def clear_cached_corpus() -> dict:

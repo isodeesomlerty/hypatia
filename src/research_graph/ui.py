@@ -13,6 +13,7 @@ def initialize_session_state() -> None:
         "papers": {},
         "relationships": [],
         "paper_edges": {},
+        "failed_pairs": {},
         "manifest": {},
         "relationship_index": {},
         "selected_graph_item": {"type": "background", "id": None},
@@ -105,6 +106,12 @@ def _count_label(count: int, singular: str, plural: str | None = None) -> str:
     return f"{count} {plural or singular + 's'}"
 
 
+def _pending_relationship_message(count: int) -> str:
+    if count == 1:
+        return "1 paper relationship is still pending."
+    return f"{count} paper relationships are still pending."
+
+
 def _evidence_strength_tone(value: str | None) -> str:
     mapping = {
         "strong": "healthy",
@@ -157,9 +164,112 @@ def _tag_help_text(kind: str, value: str | None) -> str:
             "warn": "This methodology check raised a caution flag.",
             "fail": "This methodology check raised a significant concern.",
         },
+        "relationship": {
+            "supports": "These papers independently point in the same direction.",
+            "contradicts": "These papers reach meaningfully different conclusions on a similar question.",
+            "extends": "One paper builds on or generalizes the other.",
+            "qualifies": "One paper narrows, conditions, or limits the other.",
+            "pending": "Hypatia has not finished comparing these papers yet.",
+        },
+        "relationship_strength": {
+            "direct": "The connection is explicit and close in scope.",
+            "partial": "The connection is meaningful but only overlaps part of the claim.",
+            "implicit": "The connection is inferred from the papers' claims rather than stated directly.",
+        },
     }
     kind_map = help_texts.get(kind, {})
     return kind_map.get(normalized, kind_map.get(normalized.lower(), kind_map.get("default", "")))
+
+
+RELATIONSHIP_COPY = {
+    "supports": {
+        "title": "Supports",
+        "singular": "support",
+        "plural": "supports",
+    },
+    "contradicts": {
+        "title": "Contradicts",
+        "singular": "contradiction",
+        "plural": "contradictions",
+    },
+    "extends": {
+        "title": "Extends",
+        "singular": "extension",
+        "plural": "extensions",
+    },
+    "qualifies": {
+        "title": "Qualifies",
+        "singular": "qualification",
+        "plural": "qualifications",
+    },
+    "pending": {
+        "title": "Pending",
+        "singular": "pending relationship",
+        "plural": "pending relationships",
+    },
+}
+
+
+def _relationship_tone(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    if normalized in RELATIONSHIP_COPY:
+        return normalized
+    return "pending" if normalized == "pending" else ""
+
+
+def _relationship_title(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    return RELATIONSHIP_COPY.get(normalized, {}).get("title", _pretty_label(value))
+
+
+def _relationship_count_text(value: str | None, count: int) -> str:
+    normalized = (value or "").strip().lower()
+    rel = RELATIONSHIP_COPY.get(normalized)
+    if not rel:
+        return _count_label(count, "relationship")
+    noun = rel["singular"] if count == 1 else rel["plural"]
+    return f"{count} {noun}"
+
+
+def _relationship_summary_text(value: str | None, count: int) -> str:
+    normalized = (value or "").strip().lower()
+    rel = RELATIONSHIP_COPY.get(normalized)
+    if not rel:
+        return _relationship_count_text(value, count).title()
+    noun = rel["singular"].capitalize() if count == 1 else rel["plural"].capitalize()
+    return f"{count} {noun}"
+
+
+def _relationship_pill(value: str | None, label: str | None = None, tooltip: str | None = None) -> str:
+    normalized = (value or "").strip().lower()
+    return _pill(
+        label or _relationship_title(normalized),
+        tone=_relationship_tone(normalized),
+        tooltip=tooltip or _tag_help_text("relationship", normalized),
+    )
+
+
+def _paper_tile_meta(paper: dict) -> str:
+    metadata_bits = []
+    if paper.get("authors"):
+        metadata_bits.append(", ".join(paper["authors"]))
+    if paper.get("year"):
+        metadata_bits.append(str(paper["year"]))
+    return " | ".join(metadata_bits)
+
+
+def _friendly_pair_error(error: str) -> str:
+    text = (error or "").strip()
+    lowered = text.lower()
+    if "ran out of room" in lowered or "max_tokens" in lowered:
+        return "Hypatia ran out of room while comparing these papers. Retrying later should usually recover it."
+    if "invalid structured output" in lowered or "unterminated string" in lowered:
+        return "Hypatia received an incomplete comparison result while linking these papers."
+    if "rate limit" in lowered or "429" in lowered:
+        return "Hypatia was temporarily rate-limited while comparing these papers."
+    if not text:
+        return "Hypatia has not finished comparing these papers yet."
+    return "Hypatia could not finish comparing these papers yet."
 
 
 def _claim_metadata_markup(claim: dict) -> str:
@@ -514,6 +624,133 @@ def inject_global_styles() -> None:
             color: #9b4334;
         }
 
+        .rg-pill--supports {
+            background: rgba(80, 147, 131, 0.16);
+            color: #29695d;
+            border-color: rgba(47, 124, 110, 0.18);
+        }
+
+        .rg-pill--contradicts {
+            background: rgba(186, 109, 89, 0.16);
+            color: #934d3e;
+            border-color: rgba(176, 106, 90, 0.18);
+        }
+
+        .rg-pill--extends {
+            background: rgba(123, 125, 112, 0.16);
+            color: #666250;
+            border-color: rgba(119, 118, 102, 0.18);
+        }
+
+        .rg-pill--qualifies {
+            background: rgba(212, 156, 78, 0.18);
+            color: #8b5a1d;
+            border-color: rgba(183, 131, 69, 0.18);
+        }
+
+        .rg-pill--pending {
+            background: rgba(181, 154, 118, 0.16);
+            color: #7a654b;
+            border-color: rgba(166, 141, 109, 0.16);
+        }
+
+        .rg-relationship-header {
+            margin-bottom: 1.2rem;
+            padding-bottom: 1.3rem;
+        }
+
+        .rg-relationship-hero {
+            display: flex;
+            flex-direction: column;
+            gap: 0.85rem;
+            margin-top: 0.85rem;
+        }
+
+        .rg-relationship-paper-card {
+            border: 1px solid rgba(66, 45, 27, 0.08);
+            border-radius: 22px;
+            background: rgba(255, 251, 246, 0.74);
+            padding: 1rem 1.08rem 1.05rem;
+        }
+
+        .rg-relationship-paper-label {
+            color: var(--rg-muted);
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .rg-relationship-paper-title {
+            margin-top: 0.35rem;
+            font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+            font-size: 1.38rem;
+            line-height: 1.12;
+            color: var(--rg-ink);
+        }
+
+        .rg-relationship-center {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.34rem;
+            padding: 0.05rem 0 0.1rem;
+        }
+
+        .rg-relationship-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.48rem 0.92rem;
+            border-radius: 999px;
+            font-size: 0.86rem;
+            font-weight: 700;
+            border: 1px solid rgba(127, 92, 61, 0.1);
+            background: rgba(233, 220, 205, 0.58);
+            color: #4c3725;
+        }
+
+        .rg-relationship-badge--supports {
+            background: rgba(80, 147, 131, 0.14);
+            color: #29695d;
+            border-color: rgba(47, 124, 110, 0.18);
+        }
+
+        .rg-relationship-badge--contradicts {
+            background: rgba(186, 109, 89, 0.15);
+            color: #934d3e;
+            border-color: rgba(176, 106, 90, 0.18);
+        }
+
+        .rg-relationship-badge--extends {
+            background: rgba(123, 125, 112, 0.15);
+            color: #666250;
+            border-color: rgba(119, 118, 102, 0.18);
+        }
+
+        .rg-relationship-badge--qualifies {
+            background: rgba(212, 156, 78, 0.16);
+            color: #8b5a1d;
+            border-color: rgba(183, 131, 69, 0.18);
+        }
+
+        .rg-relationship-badge--pending {
+            background: rgba(181, 154, 118, 0.16);
+            color: #7a654b;
+            border-color: rgba(166, 141, 109, 0.16);
+        }
+
+        .rg-relationship-center-note {
+            color: var(--rg-muted);
+            font-size: 0.79rem;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .rg-pill-row--relationship-summary {
+            margin-top: 1.18rem;
+        }
+
         .rg-claim-shell,
         .rg-check-shell,
         .rg-edge-shell {
@@ -540,6 +777,12 @@ def inject_global_styles() -> None:
 
         .rg-detail-meta--compact {
             margin-top: 0.55rem;
+        }
+
+        .rg-detail-meta--paper-tile {
+            margin-top: 0.55rem;
+            line-height: 1.5;
+            font-size: 0.88rem;
         }
 
         .rg-claim-metadata {
@@ -588,7 +831,7 @@ def inject_global_styles() -> None:
         }
 
         div[data-testid="stExpander"] details > div {
-            padding: 0 1.15rem 1.1rem;
+            padding: 0.42rem 1.15rem 1.48rem;
         }
 
         .rg-expander-intro {
@@ -712,6 +955,68 @@ def inject_global_styles() -> None:
 
         .rg-activity-item--concern span:last-child {
             color: #9b4334;
+        }
+
+        .rg-relationship-stats {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.8rem;
+            margin-top: 1rem;
+        }
+
+        .rg-edge-shell--supports {
+            background: rgba(246, 251, 249, 0.9);
+            border-color: rgba(47, 124, 110, 0.12);
+        }
+
+        .rg-edge-shell--contradicts {
+            background: rgba(252, 247, 245, 0.92);
+            border-color: rgba(176, 106, 90, 0.12);
+        }
+
+        .rg-edge-shell--extends {
+            background: rgba(249, 248, 244, 0.92);
+            border-color: rgba(119, 118, 102, 0.12);
+        }
+
+        .rg-edge-shell--qualifies {
+            background: rgba(252, 249, 244, 0.92);
+            border-color: rgba(183, 131, 69, 0.12);
+        }
+
+        .rg-edge-shell--pending {
+            background: rgba(249, 246, 241, 0.92);
+            border-color: rgba(166, 141, 109, 0.12);
+        }
+
+        .rg-edge-stat-label {
+            color: var(--rg-muted);
+            font-size: 0.79rem;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+
+        .rg-edge-stat-value {
+            margin-top: 0.4rem;
+            font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+            font-size: 1.7rem;
+            line-height: 1;
+            color: var(--rg-ink);
+        }
+
+        .rg-relationship-pill-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin: 1rem 0 1.1rem;
+            overflow: visible;
+        }
+
+        .rg-relationship-explainer {
+            color: var(--rg-ink);
+            font-size: 1rem;
+            line-height: 1.62;
+            margin-bottom: 0.38rem;
         }
 
         @keyframes rg-spin {
@@ -1013,93 +1318,190 @@ def render_paper_details(paper: dict) -> None:
             st.info("No extracted claims are available for this paper.")
 
 
+def _render_relationship_header(
+    paper_a: dict,
+    paper_b: dict,
+    aggregate: dict,
+    is_pending_only: bool,
+) -> None:
+    if is_pending_only:
+        summary_tone = "pending"
+        summary_text = "Pending"
+        summary_note = "Comparison in progress"
+        summary_pills = [
+            _relationship_pill(
+                "pending",
+                label="Pending relationship",
+                tooltip=_tag_help_text("relationship", "pending"),
+            )
+        ]
+    else:
+        dominant = aggregate.get("dominant", "supports")
+        dominant_count = aggregate.get(dominant, 0)
+        summary_tone = _relationship_tone(dominant)
+        summary_text = _relationship_summary_text(dominant, dominant_count)
+        summary_note = "Dominant relationship"
+        summary_pills = [
+            _relationship_pill("contradicts", label=_relationship_count_text("contradicts", aggregate.get("contradicts", 0))),
+            _relationship_pill("supports", label=_relationship_count_text("supports", aggregate.get("supports", 0))),
+            _relationship_pill("extends", label=_relationship_count_text("extends", aggregate.get("extends", 0))),
+            _relationship_pill("qualifies", label=_relationship_count_text("qualifies", aggregate.get("qualifies", 0))),
+        ]
+
+    paper_a_meta = _paper_tile_meta(paper_a)
+    paper_b_meta = _paper_tile_meta(paper_b)
+    st.markdown(
+        f"""
+        <div class="rg-panel-card rg-relationship-header">
+          <div class="rg-panel-title">Paper Relationship</div>
+          <div class="rg-relationship-hero">
+            <div class="rg-relationship-paper-card">
+              <div class="rg-relationship-paper-label">Paper A</div>
+              <div class="rg-relationship-paper-title">{escape(paper_a.get('title', 'Unknown paper'))}</div>
+              {f'<div class="rg-detail-meta rg-detail-meta--paper-tile">{escape(paper_a_meta)}</div>' if paper_a_meta else ''}
+            </div>
+            <div class="rg-relationship-center">
+              <div class="rg-relationship-badge rg-relationship-badge--{escape(summary_tone)}">{escape(summary_text)}</div>
+              <div class="rg-relationship-center-note">{escape(summary_note)}</div>
+            </div>
+            <div class="rg-relationship-paper-card">
+              <div class="rg-relationship-paper-label">Paper B</div>
+              <div class="rg-relationship-paper-title">{escape(paper_b.get('title', 'Unknown paper'))}</div>
+              {f'<div class="rg-detail-meta rg-detail-meta--paper-tile">{escape(paper_b_meta)}</div>' if paper_b_meta else ''}
+            </div>
+          </div>
+          <div class="rg-pill-row rg-pill-row--relationship-summary">{''.join(summary_pills)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_edge_details(
     selection: dict,
     papers: dict[str, dict],
     paper_edges: dict[tuple[str, str], dict],
     relationship_index: dict[str, list[dict]],
+    failed_pairs: dict[str, dict],
 ) -> None:
     edge_key = selection["id"]
     left, right = edge_key.split("||", maxsplit=1)
     paper_a = papers.get(left, {})
     paper_b = papers.get(right, {})
     aggregate = paper_edges.get(tuple(sorted((left, right))), {})
-
-    title = f"{paper_a.get('title', left)} <-> {paper_b.get('title', right)}"
-    _render_panel_header(
-        eyebrow="Paper Relationship",
-        title=title,
-        pills=[
-            _pill(_count_label(aggregate.get('contradicts', 0), "contradiction")),
-            _pill(_count_label(aggregate.get('supports', 0), "support")),
-            _pill(_count_label(aggregate.get('extends', 0), "extension")),
-            _pill(_count_label(aggregate.get('qualifies', 0), "qualification")),
-        ],
-    )
+    pending = failed_pairs.get(edge_key)
+    is_pending_only = bool(pending and not aggregate)
+    _render_relationship_header(paper_a, paper_b, aggregate, is_pending_only)
 
     overview_tab, links_tab, notes_tab = st.tabs(["Overview", "Claim Relationships", "Method Notes"])
 
     with overview_tab:
-        st.markdown(
-            """
-            <div class="rg-detail-card">
-              <div class="rg-panel-title">Aggregate View</div>
-              <p class="rg-help-text">
-                This paper relationship rolls up the claim relationships between the two papers.
-                Use the other tabs to inspect each underlying claim relationship and the methodological notes behind disagreements.
-              </p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        if aggregate:
-            for label, key in (
-                ("Contradictions", "contradicts"),
-                ("Supports", "supports"),
-                ("Extensions", "extends"),
-                ("Qualifications", "qualifies"),
-            ):
+        if is_pending_only:
+            st.markdown(
+                """
+                <div class="rg-detail-card rg-edge-shell--pending">
+                  <div class="rg-panel-title">Pending Comparison</div>
+                  <p class="rg-help-text">
+                    Hypatia added both papers to the map, but the comparison between them did not complete yet.
+                    This line is shown as a pending paper relationship rather than a confirmed connection.
+                  </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                """
+                <div class="rg-detail-card">
+                  <div class="rg-panel-title">Aggregate View</div>
+                  <p class="rg-help-text">
+                    This paper relationship rolls up the claim relationships between the two papers.
+                    Use the other tabs to inspect each underlying claim relationship and the methodological notes behind disagreements.
+                  </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if aggregate:
+                stat_cards = []
+                for label, key in (
+                    ("Contradictions", "contradicts"),
+                    ("Supports", "supports"),
+                    ("Extensions", "extends"),
+                    ("Qualifications", "qualifies"),
+                ):
+                    tone = _relationship_tone(key)
+                    stat_cards.append(
+                        (
+                            f'<div class="rg-edge-shell rg-edge-shell--{escape(tone)}">'
+                            f'<div class="rg-edge-stat-label">{escape(label)}</div>'
+                            f'<div class="rg-edge-stat-value">{aggregate.get(key, 0)}</div>'
+                            '<div class="rg-detail-meta" style="margin-top:0.42rem;">claim relationships</div>'
+                            "</div>"
+                        )
+                    )
                 st.markdown(
-                    f"""
-                    <div class="rg-edge-shell">
-                      <strong>{escape(label)}</strong>
-                      <div class="rg-detail-meta" style="margin-top:0.35rem;">{aggregate.get(key, 0)} claim relationships</div>
-                    </div>
-                    """,
+                    f'<div class="rg-relationship-stats">{"".join(stat_cards)}</div>',
                     unsafe_allow_html=True,
                 )
 
     all_relationships = relationship_index.get(edge_key, [])
     with links_tab:
-        if not all_relationships:
+        if is_pending_only:
+            st.info("Claim relationships will appear here once the paper comparison completes.")
+        elif not all_relationships:
             st.info("No claim relationships were stored for this paper relationship.")
-        for index, relationship in enumerate(all_relationships, start=1):
-            label = (
-                f"{index}. "
-                f"{_pretty_label(relationship.get('relationship', 'related'))} "
-                f"({relationship.get('relationship_strength', 'unknown')})"
-            )
-            with st.expander(label, expanded=False):
-                st.markdown(_pill(_pretty_label(relationship.get("relationship", "related"))), unsafe_allow_html=True)
-                st.write(relationship.get("explanation", ""))
-                st.caption(
-                    f"{relationship.get('source_claim_id', 'unknown')} -> {relationship.get('target_claim_id', 'unknown')}"
+        else:
+            for index, relationship in enumerate(all_relationships, start=1):
+                relationship_type = relationship.get("relationship", "related")
+                relationship_strength = relationship.get("relationship_strength", "unknown")
+                label = (
+                    f"{index}. "
+                    f"{_relationship_title(relationship_type)} "
+                    f"({_pretty_label(relationship_strength)})"
                 )
+                with st.expander(label, expanded=False):
+                    st.markdown(
+                        f"""
+                        <div class="rg-relationship-pill-row">
+                          {_relationship_pill(relationship_type)}
+                          {_pill(
+                              _pretty_label(relationship_strength),
+                              tooltip=_tag_help_text("relationship_strength", relationship_strength),
+                          )}
+                        </div>
+                        <div class="rg-relationship-explainer">{escape(relationship.get('explanation', ''))}</div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
     with notes_tab:
-        notes = [item for item in all_relationships if item.get("methodological_note", "").strip()]
-        if not notes:
-            st.info("No explicit methodological notes were returned for this paper relationship.")
-        for item in notes:
+        if is_pending_only:
             st.markdown(
                 f"""
                 <div class="rg-check-shell">
-                  <strong>{escape(_pretty_label(item.get('relationship', 'related')))}</strong>
-                  <div class="rg-help-text" style="margin-top:0.55rem;">{escape(item.get('methodological_note', ''))}</div>
+                  <strong>Last attempt</strong>
+                  <div class="rg-help-text" style="margin-top:0.55rem;">{escape(_friendly_pair_error(pending.get('error', '')))}</div>
+                  {f'<div class="rg-detail-meta" style="margin-top:0.35rem;">Technical detail: {escape(pending.get("error", ""))}</div>' if pending.get('error') else ''}
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
+        else:
+            notes = [item for item in all_relationships if item.get("methodological_note", "").strip()]
+            if not notes:
+                st.info("No explicit methodological notes were returned for this paper relationship.")
+            for item in notes:
+                relationship_type = item.get("relationship", "related")
+                st.markdown(
+                    f"""
+                    <div class="rg-check-shell rg-edge-shell--{escape(_relationship_tone(relationship_type))}">
+                      <strong>{escape(_relationship_title(relationship_type))}</strong>
+                      <div class="rg-help-text" style="margin-top:0.55rem;">{escape(item.get('methodological_note', ''))}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
 
 def render_detail_panel(
@@ -1107,6 +1509,7 @@ def render_detail_panel(
     papers: dict[str, dict],
     paper_edges: dict[tuple[str, str], dict],
     relationship_index: dict[str, list[dict]],
+    failed_pairs: dict[str, dict],
 ) -> None:
     st.markdown('<div class="rg-panel-title">Knowledge Panel</div>', unsafe_allow_html=True)
     if not selection_is_meaningful(selected_graph_item):
@@ -1133,7 +1536,7 @@ def render_detail_panel(
         return
 
     if selected_graph_item["type"] == "edge":
-        render_edge_details(selected_graph_item, papers, paper_edges, relationship_index)
+        render_edge_details(selected_graph_item, papers, paper_edges, relationship_index, failed_pairs)
         return
 
     st.info("Click a paper or paper relationship to inspect details.")

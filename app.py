@@ -22,7 +22,12 @@ from research_graph.cache import (  # noqa: E402
     save_combined_dataset,
 )
 from research_graph.components.graph_component import render_graph_component  # noqa: E402
-from research_graph.graph import aggregate_paper_edges, build_graph_payload, build_relationship_index  # noqa: E402
+from research_graph.graph import (  # noqa: E402
+    aggregate_paper_edges,
+    build_graph_payload,
+    build_pending_pair_index,
+    build_relationship_index,
+)
 from research_graph.pipeline import (  # noqa: E402
     PAPER_ANALYSIS_SIGNATURE,
     PAIRWISE_ANALYSIS_SIGNATURE,
@@ -44,6 +49,7 @@ from research_graph.ui import (  # noqa: E402
     render_search_summary,
     reset_view,
     set_search_state,
+    _pending_relationship_message,
 )
 
 
@@ -63,6 +69,7 @@ def load_dataset_into_session(force: bool = False) -> None:
     st.session_state.paper_edges = paper_edges
     st.session_state.manifest = manifest
     st.session_state.relationship_index = build_relationship_index(relationships, papers)
+    st.session_state.failed_pairs = build_pending_pair_index(manifest, papers)
     st.session_state.data_loaded = True
 
 
@@ -77,6 +84,7 @@ def sync_dataset(
     st.session_state.paper_edges = paper_edges
     st.session_state.manifest = manifest
     st.session_state.relationship_index = build_relationship_index(relationships, papers)
+    st.session_state.failed_pairs = build_pending_pair_index(manifest, papers)
     st.session_state.data_loaded = True
 
 
@@ -153,6 +161,7 @@ def main() -> None:
         nodes, edges = build_graph_payload(
             st.session_state.papers,
             st.session_state.paper_edges,
+            pending_pairs=st.session_state.failed_pairs,
             highlighted_paper_ids=highlighted,
             hide_low_signal_edges=st.session_state.hide_low_signal_edges,
         )
@@ -263,8 +272,7 @@ def main() -> None:
                         st.session_state.upload_notice = f"Added {paper['title']}."
                         if pair_failures:
                             st.session_state.upload_notice += (
-                                f" Some pairwise comparisons failed ({len(pair_failures)}), "
-                                "but the paper was still added."
+                                f" {_pending_relationship_message(len(pair_failures))}"
                             )
                         st.session_state.pending_upload_paper = None
                         st.session_state.pending_duplicate_matches = []
@@ -361,8 +369,7 @@ def main() -> None:
                     st.session_state.upload_notice = f"Added {paper['title']}."
                     if pair_failures:
                         st.session_state.upload_notice += (
-                            f" Some pairwise comparisons failed ({len(pair_failures)}), "
-                            "but the paper was still added."
+                            f" {_pending_relationship_message(len(pair_failures))}"
                         )
                     clear_upload_widget()
                     st.session_state.reset_token += 1
@@ -450,6 +457,7 @@ def main() -> None:
             st.session_state.papers,
             st.session_state.paper_edges,
             st.session_state.relationship_index,
+            st.session_state.failed_pairs,
         )
 
 

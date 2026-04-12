@@ -39,6 +39,8 @@ REQUEST_TIMEOUT_SECONDS = int(os.getenv("RG_REQUEST_TIMEOUT_SECONDS", "180"))
 SEARCH_TIMEOUT_SECONDS = int(os.getenv("RG_SEARCH_TIMEOUT_SECONDS", "60"))
 EXTRACTION_WORKERS = int(os.getenv("RG_EXTRACTION_WORKERS", "8"))
 PAIRWISE_WORKERS = int(os.getenv("RG_PAIRWISE_WORKERS", "16"))
+PAIRWISE_MAX_TOKENS = int(os.getenv("RG_PAIRWISE_MAX_TOKENS", "4096"))
+PAIRWISE_RETRY_MAX_TOKENS = int(os.getenv("RG_PAIRWISE_RETRY_MAX_TOKENS", "6144"))
 API_MAX_RETRIES = int(os.getenv("RG_API_MAX_RETRIES", "2"))
 API_RETRY_BASE_DELAY_SECONDS = float(os.getenv("RG_API_RETRY_BASE_DELAY_SECONDS", "1.0"))
 
@@ -69,6 +71,7 @@ DEFAULT_MANIFEST = {
     "version": 1,
     "papers_by_hash": {},
     "processed_pairs": {},
+    "failed_pairs": {},
     "failed_files": {},
 }
 

@@ -82,6 +82,29 @@ def build_relationship_index(
     return dict(index)
 
 
+def build_pending_pair_index(
+    manifest: dict,
+    papers: dict[str, dict],
+) -> dict[str, dict]:
+    paper_ids = set(papers)
+    processed_pairs = set(manifest.get("processed_pairs", {}))
+    pending: dict[str, dict] = {}
+    for key, entry in manifest.get("failed_pairs", {}).items():
+        if key in processed_pairs:
+            continue
+        left, right = key.split("||", maxsplit=1)
+        if left not in paper_ids or right not in paper_ids:
+            continue
+        pending[key] = {
+            "paper_a_id": left,
+            "paper_b_id": right,
+            "error": entry.get("error", ""),
+            "updated_at": entry.get("updated_at", ""),
+            "status": "pending",
+        }
+    return pending
+
+
 def format_health_badge(paper: dict) -> str:
     score = paper.get("health_score", {}).get("overall_score", "caution")
     return score.replace("_", " ").title()
@@ -116,6 +139,7 @@ def _node_color(base_color: str, dimmed: bool) -> dict:
 def build_graph_payload(
     papers: dict[str, dict],
     paper_edges: dict[tuple[str, str], dict],
+    pending_pairs: dict[str, dict] | None = None,
     highlighted_paper_ids: list[str] | None = None,
     hide_low_signal_edges: bool = False,
 ) -> tuple[list[dict], list[dict]]:
@@ -160,6 +184,7 @@ def build_graph_payload(
         )
 
     edges: list[dict] = []
+    rendered_edge_ids: set[str] = set()
     for (paper_a, paper_b), aggregate in sorted(
         paper_edges.items(),
         key=lambda item: (-item[1].get("total_weight", 0), item[0]),
@@ -181,6 +206,7 @@ def build_graph_payload(
                 "id": pair_key(paper_a, paper_b),
                 "from": paper_a,
                 "to": paper_b,
+                "status": "ready",
                 "title": title,
                 "width": min(2 + aggregate.get("total_weight", 0), 10),
                 "dashes": dominant in {"extends", "qualifies"},
@@ -189,6 +215,33 @@ def build_graph_payload(
                     "highlight": EDGE_COLORS[dominant],
                     "hover": EDGE_COLORS[dominant],
                     "opacity": 0.8 if not dimmed else 0.35,
+                },
+                "smooth": False,
+            }
+        )
+        rendered_edge_ids.add(pair_key(paper_a, paper_b))
+
+    for edge_id, pending in sorted((pending_pairs or {}).items()):
+        if edge_id in rendered_edge_ids:
+            continue
+        paper_a = pending["paper_a_id"]
+        paper_b = pending["paper_b_id"]
+        dimmed = apply_focus and not ({paper_a, paper_b} <= highlight_set)
+        color = "#B9AE9F" if not dimmed else "#D6CEC3"
+        edges.append(
+            {
+                "id": edge_id,
+                "from": paper_a,
+                "to": paper_b,
+                "status": "pending",
+                "title": _tooltip_text("Paper relationship pending", "Click for details"),
+                "width": 1.8,
+                "dashes": True,
+                "color": {
+                    "color": color,
+                    "highlight": "#B9AE9F",
+                    "hover": "#B9AE9F",
+                    "opacity": 0.9 if not dimmed else 0.45,
                 },
                 "smooth": False,
             }
