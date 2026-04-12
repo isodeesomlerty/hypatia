@@ -137,6 +137,21 @@ def main() -> None:
         value=st.session_state.hide_low_signal_edges,
     )
 
+    _all_edge_types = ["supports", "extends", "contradicts", "qualifies"]
+    _edge_labels = {
+        "supports": "Supports",
+        "extends": "Extends",
+        "contradicts": "Contradicts",
+        "qualifies": "Qualifies",
+    }
+    selected_edge_types = controls_right.multiselect(
+        "Connection layers",
+        options=_all_edge_types,
+        default=st.session_state.visible_edge_types,
+        format_func=lambda t: _edge_labels[t],
+        key="visible_edge_types",
+    )
+
     if search_submitted:
         if not st.session_state.papers:
             st.warning("Add papers to your research map before searching.")
@@ -175,6 +190,7 @@ def main() -> None:
             st.session_state.paper_edges,
             highlighted_paper_ids=highlighted,
             hide_low_signal_edges=st.session_state.hide_low_signal_edges,
+            visible_edge_types=set(st.session_state.visible_edge_types),
         )
         selection = render_graph_component(
             nodes=nodes,

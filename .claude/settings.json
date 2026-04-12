@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(.venv/bin/python -c \"from src.research_graph.pipeline import compute_and_save_measures; print\\('pipeline import ok'\\)\")"
+      "Bash(.venv/bin/python -c \"from src.research_graph.pipeline import compute_and_save_measures; print\\('pipeline import ok'\\)\")",
+      "Bash(.venv/bin/python -c ':*)"
     ]
   }
 }

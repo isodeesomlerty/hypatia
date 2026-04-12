@@ -118,6 +118,7 @@ def build_graph_payload(
     paper_edges: dict[tuple[str, str], dict],
     highlighted_paper_ids: list[str] | None = None,
     hide_low_signal_edges: bool = False,
+    visible_edge_types: set[str] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     highlight_set = set(highlighted_paper_ids or [])
     apply_focus = bool(highlight_set)
@@ -168,6 +169,8 @@ def build_graph_payload(
             continue
 
         dominant = aggregate["dominant"]
+        if visible_edge_types is not None and dominant not in visible_edge_types:
+            continue
         dimmed = apply_focus and not ({paper_a, paper_b} <= highlight_set)
         color = "#CBBEAF" if dimmed else EDGE_COLORS[dominant]
         title = _tooltip_text(

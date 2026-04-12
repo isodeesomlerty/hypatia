@@ -25,6 +25,7 @@ def initialize_session_state() -> None:
             "fallback_error": "",
         },
         "hide_low_signal_edges": False,
+        "visible_edge_types": ["contradicts", "supports", "extends", "qualifies"],
         "reset_token": 0,
         "uploader_reset_token": 0,
         "data_loaded": False,

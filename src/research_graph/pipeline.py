@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -57,6 +59,7 @@ from .config import (
     REQUEST_TIMEOUT_SECONDS,
     SEARCH_MODEL,
     SEARCH_TIMEOUT_SECONDS,
+    SUPPRESS_PDF_PARSER_WARNINGS,
     ensure_project_dirs,
 )
 from .measures import compute_measures
@@ -542,23 +545,35 @@ def inspect_pdf(pdf_path: Path) -> dict:
     }
 
 
+@contextmanager
+def _suppress_pdf_parser_noise() -> Any:
+    if not SUPPRESS_PDF_PARSER_WARNINGS:
+        yield
+        return
+
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        yield
+
+
 def _extract_text_with_pdfplumber(pdf_path: Path) -> str:
     chunks: list[str] = []
-    with pdfplumber.open(pdf_path) as document:
-        for page in document.pages:
-            text = page.extract_text() or ""
-            if text.strip():
-                chunks.append(text)
+    with _suppress_pdf_parser_noise():
+        with pdfplumber.open(pdf_path) as document:
+            for page in document.pages:
+                text = page.extract_text() or ""
+                if text.strip():
+                    chunks.append(text)
     return "\n\n".join(chunks).strip()
 
 
 def _extract_text_with_pymupdf(pdf_path: Path) -> str:
     chunks: list[str] = []
-    with fitz.open(pdf_path) as document:
-        for page in document:
-            text = page.get_text("text") or ""
-            if text.strip():
-                chunks.append(text)
+    with _suppress_pdf_parser_noise():
+        with fitz.open(pdf_path) as document:
+            for page in document:
+                text = page.get_text("text") or ""
+                if text.strip():
+                    chunks.append(text)
     return "\n\n".join(chunks).strip()
 
 

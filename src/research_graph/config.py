@@ -34,6 +34,10 @@ PAPER_ANALYSIS_PDF_PAGE_THRESHOLD = int(
 )
 SEARCH_MODEL = os.getenv("RG_SEARCH_MODEL", "claude-sonnet-4-6")
 RELATIONSHIP_MODEL = os.getenv("RG_RELATIONSHIP_MODEL", "claude-haiku-4-5-20251001")
+SUPPRESS_PDF_PARSER_WARNINGS = (
+    os.getenv("RG_SUPPRESS_PDF_PARSER_WARNINGS", "1").strip().lower()
+    not in {"0", "false", "no"}
+)
 
 PDF_MAX_PAGES = int(os.getenv("RG_PDF_MAX_PAGES", "100"))
 PDF_MAX_FILE_MB = int(os.getenv("RG_PDF_MAX_FILE_MB", "32"))
