@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 
 
 TOKEN_RE = re.compile(r"[a-z0-9]+")
-EMBEDDING_DIMENSIONS = 128
+EMBEDDING_DIMENSIONS = int(os.getenv("HYPATIA_SEARCH_EMBEDDING_DIMENSIONS", "256"))
 
 
 def tokenize(text: str) -> list[str]:

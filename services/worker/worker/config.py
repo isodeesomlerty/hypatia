@@ -40,6 +40,22 @@ class WorkerSettings:
     upload_storage_s3_force_path_style: bool = (
         os.getenv("HYPATIA_UPLOAD_STORAGE_S3_FORCE_PATH_STYLE", "0") == "1"
     )
+    search_embedding_provider: str = os.getenv("HYPATIA_SEARCH_EMBEDDING_PROVIDER", "auto")
+    search_embedding_model: str = os.getenv(
+        "HYPATIA_SEARCH_EMBEDDING_MODEL",
+        "text-embedding-3-small",
+    )
+    search_embedding_dimensions: int = int(
+        os.getenv("HYPATIA_SEARCH_EMBEDDING_DIMENSIONS", "256")
+    )
+    search_embedding_openai_api_key: str = (
+        os.getenv("HYPATIA_SEARCH_EMBEDDING_OPENAI_API_KEY")
+        or os.getenv("OPENAI_API_KEY", "")
+    )
+    search_embedding_openai_base_url: str = os.getenv(
+        "HYPATIA_SEARCH_EMBEDDING_OPENAI_BASE_URL",
+        "https://api.openai.com/v1",
+    )
 
 
 settings = WorkerSettings()

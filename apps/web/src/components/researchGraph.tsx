@@ -5,6 +5,7 @@ type ResearchGraphProps = {
   graph: GraphPayload;
   selectedPaperId?: string | null;
   selectedRelationshipId?: string | null;
+  highlightedPaperIds?: string[];
 };
 
 type PositionedNode = {
@@ -57,12 +58,15 @@ export function ResearchGraph({
   graph,
   selectedPaperId,
   selectedRelationshipId,
+  highlightedPaperIds = [],
 }: ResearchGraphProps) {
   const nodes = buildPositions(graph);
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  const highlightedSet = new Set(highlightedPaperIds);
+  const hasSearchFocus = highlightedSet.size > 0;
 
   return (
-    <div className="graph-canvas">
+    <div className={`graph-canvas ${hasSearchFocus ? "graph-canvas--search-focus" : ""}`}>
       <svg
         className="graph-svg"
         viewBox="0 0 680 440"
@@ -82,6 +86,8 @@ export function ResearchGraph({
               ? "pending"
               : RELATIONSHIP_CLASS[edge.relationship_type] || "supports";
           const isSelected = edge.id === selectedRelationshipId;
+          const isSearchMatch =
+            highlightedSet.has(edge.source) || highlightedSet.has(edge.target);
 
           return (
             <a key={edge.id} href={relationshipHref(workspaceId, edge.id)}>
@@ -95,6 +101,10 @@ export function ResearchGraph({
                 />
                 <line
                   className={`graph-edge-line graph-edge-line--${relationshipClass} ${
+                    hasSearchFocus && isSearchMatch ? "graph-edge-line--search-match" : ""
+                  } ${
+                    hasSearchFocus && !isSearchMatch ? "graph-edge-line--search-muted" : ""
+                  } ${
                     isSelected ? "graph-edge-line--selected" : ""
                   }`}
                   x1={source.x}
@@ -113,16 +123,42 @@ export function ResearchGraph({
             <g className="graph-node-group">
               <circle
                 className={`graph-node-circle ${
+                  hasSearchFocus && highlightedSet.has(node.id)
+                    ? "graph-node-circle--search-match"
+                    : ""
+                } ${
+                  hasSearchFocus && !highlightedSet.has(node.id)
+                    ? "graph-node-circle--search-muted"
+                    : ""
+                } ${
                   node.id === selectedPaperId ? "graph-node-circle--selected" : ""
                 }`}
                 cx={node.x}
                 cy={node.y}
                 r="32"
               />
-              <text className="graph-node-text" x={node.x} y={node.y + 5} textAnchor="middle">
+              <text
+                className={`graph-node-text ${
+                  hasSearchFocus && !highlightedSet.has(node.id)
+                    ? "graph-node-text--search-muted"
+                    : ""
+                }`}
+                x={node.x}
+                y={node.y + 5}
+                textAnchor="middle"
+              >
                 {node.id.split("-").at(-1)}
               </text>
-              <text className="graph-node-label" x={node.x} y={node.y + 58} textAnchor="middle">
+              <text
+                className={`graph-node-label ${
+                  hasSearchFocus && !highlightedSet.has(node.id)
+                    ? "graph-node-label--search-muted"
+                    : ""
+                }`}
+                x={node.x}
+                y={node.y + 58}
+                textAnchor="middle"
+              >
                 {labelForNode(node.label)}
               </text>
             </g>

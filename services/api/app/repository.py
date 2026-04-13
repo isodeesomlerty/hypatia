@@ -11,6 +11,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from app.auth import ViewerContext
+from app.embeddings import embed_query_text, vector_literal
 from app.config import settings
 from app.models import (
     BatchStatus,
@@ -721,7 +722,12 @@ class InMemoryWorkspaceRepository:
             _search_paper_from_detail(detail)
             for detail in self._paper_details.get(workspace_id, {}).values()
         ]
-        result = search_workspace_claims(request.query, papers, limit=request.limit)
+        result = search_workspace_claims(
+            request.query,
+            papers,
+            limit=request.limit,
+            search_mode="hybrid_claim_ranking",
+        )
         return WorkspaceSearchResponse(
             workspace_id=workspace_id,
             query=request.query,
@@ -1002,6 +1008,19 @@ class PostgresWorkspaceRepository:
             claims=claims,
         )
 
+    def _pgvector_enabled(self, connection) -> bool:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'claims'
+                  AND column_name = 'search_embedding_vector'
+                LIMIT 1
+                """
+            )
+            return cursor.fetchone() is not None
+
     def _workspace_search_papers(self, connection, workspace_id: str) -> list[dict]:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -1060,6 +1079,125 @@ class PostgresWorkspaceRepository:
                     }
                 )
         return list(papers.values())
+
+    def _workspace_search_candidate_papers(
+        self,
+        connection,
+        workspace_id: str,
+        query: str,
+        *,
+        limit: int,
+    ) -> tuple[list[dict], str]:
+        query_embedding, provider = embed_query_text(query)
+        candidate_limit = max(limit * 4, 24)
+        candidate_rows: dict[str, dict] = {}
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                  paper.id AS paper_id,
+                  paper.title,
+                  paper.authors,
+                  paper.publication_year,
+                  claim.id AS claim_id,
+                  claim.text,
+                  claim.claim_type,
+                  claim.evidence_type,
+                  claim.evidence_strength,
+                  claim.evidence_reasoning,
+                  claim.key_variables,
+                  claim.context,
+                  claim.search_text,
+                  claim.search_embedding,
+                  ts_rank_cd(
+                    to_tsvector('simple', claim.search_text),
+                    websearch_to_tsquery('simple', %s)
+                  ) AS lexical_rank
+                FROM papers AS paper
+                JOIN claims AS claim
+                  ON claim.workspace_id = paper.workspace_id
+                 AND claim.paper_id = paper.id
+                WHERE paper.workspace_id = %s
+                  AND claim.search_text <> ''
+                  AND to_tsvector('simple', claim.search_text) @@ websearch_to_tsquery('simple', %s)
+                ORDER BY lexical_rank DESC, paper.publication_year DESC NULLS LAST, paper.title ASC
+                LIMIT %s
+                """,
+                (query, workspace_id, query, candidate_limit),
+            )
+            for row in cursor.fetchall():
+                candidate_rows[row["claim_id"]] = row
+
+            vector_mode = self._pgvector_enabled(connection)
+            if vector_mode:
+                vector = vector_literal(query_embedding)
+                cursor.execute(
+                    """
+                    SELECT
+                      paper.id AS paper_id,
+                      paper.title,
+                      paper.authors,
+                      paper.publication_year,
+                      claim.id AS claim_id,
+                      claim.text,
+                      claim.claim_type,
+                      claim.evidence_type,
+                      claim.evidence_strength,
+                      claim.evidence_reasoning,
+                      claim.key_variables,
+                      claim.context,
+                      claim.search_text,
+                      claim.search_embedding,
+                      1 - (claim.search_embedding_vector <=> %s::vector) AS semantic_rank
+                    FROM papers AS paper
+                    JOIN claims AS claim
+                      ON claim.workspace_id = paper.workspace_id
+                     AND claim.paper_id = paper.id
+                    WHERE paper.workspace_id = %s
+                      AND claim.search_embedding_vector IS NOT NULL
+                    ORDER BY claim.search_embedding_vector <=> %s::vector ASC
+                    LIMIT %s
+                    """,
+                    (vector, workspace_id, vector, candidate_limit),
+                )
+                for row in cursor.fetchall():
+                    candidate_rows.setdefault(row["claim_id"], row)
+            else:
+                vector_mode = False
+
+        papers: dict[str, dict] = {}
+        for row in candidate_rows.values():
+            paper_id = row["paper_id"]
+            paper = papers.setdefault(
+                paper_id,
+                {
+                    "paper_id": paper_id,
+                    "title": row["title"],
+                    "authors": _coerce_str_list(row.get("authors")),
+                    "year": row.get("publication_year"),
+                    "claims": [],
+                },
+            )
+            paper["claims"].append(
+                {
+                    "claim_id": row["claim_id"],
+                    "claim": row.get("text", ""),
+                    "claim_type": row.get("claim_type") or "descriptive",
+                    "evidence_type": row.get("evidence_type") or "other",
+                    "evidence_strength": row.get("evidence_strength") or "moderate",
+                    "evidence_reasoning": row.get("evidence_reasoning") or "",
+                    "key_variables": _coerce_str_list(row.get("key_variables")),
+                    "context": row.get("context") or "",
+                    "search_text": row.get("search_text") or "",
+                    "search_embedding": row.get("search_embedding") or [],
+                }
+            )
+
+        mode = "hybrid_pgvector_ranking" if vector_mode else "hybrid_claim_ranking"
+        if vector_mode and provider != "local":
+            mode = f"{mode}_{provider}"
+        return list(papers.values()), mode
 
     def _claim_relationships_for_pair(
         self,
@@ -1496,9 +1634,22 @@ class PostgresWorkspaceRepository:
         with self._connect() as connection:
             self._ensure_viewer_seed(connection, viewer)
             self._assert_workspace_access(connection, workspace_id, viewer)
-            papers = self._workspace_search_papers(connection, workspace_id)
+            papers, search_mode = self._workspace_search_candidate_papers(
+                connection,
+                workspace_id,
+                request.query,
+                limit=request.limit,
+            )
+            if not papers:
+                papers = self._workspace_search_papers(connection, workspace_id)
+                search_mode = "hybrid_claim_ranking"
 
-        result = search_workspace_claims(request.query, papers, limit=request.limit)
+        result = search_workspace_claims(
+            request.query,
+            papers,
+            limit=request.limit,
+            search_mode=search_mode,
+        )
         return WorkspaceSearchResponse(
             workspace_id=workspace_id,
             query=request.query,

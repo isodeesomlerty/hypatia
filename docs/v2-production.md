@@ -81,8 +81,12 @@ The V2 workspace now also includes a first search surface:
 - researchers can search across persisted claim text, titles, evidence labels,
   and claim context within a private workspace
 - search results deep-link back into paper detail views in the knowledge panel
-- this currently uses hybrid lexical + local vector ranking over persisted
-  workspace content rather than a dedicated external search service
+  and now highlight matching papers directly in the graph
+- Postgres workspaces can use pgvector-backed candidate retrieval when the
+  extension is available, while still falling back to local hybrid ranking if
+  vector support is not present yet
+- search embeddings now support a real provider path through
+  `HYPATIA_SEARCH_EMBEDDING_PROVIDER=auto|openai|local`
 
 For auth, the branch now has a viewer-aware contract end to end:
 
@@ -133,6 +137,14 @@ S3-compatible upload storage uses:
 - `HYPATIA_UPLOAD_STORAGE_S3_PREFIX`
 - `HYPATIA_UPLOAD_STORAGE_S3_FORCE_PATH_STYLE`
 
+Search embeddings use:
+
+- `HYPATIA_SEARCH_EMBEDDING_PROVIDER`
+- `HYPATIA_SEARCH_EMBEDDING_MODEL`
+- `HYPATIA_SEARCH_EMBEDDING_DIMENSIONS`
+- `HYPATIA_SEARCH_EMBEDDING_OPENAI_API_KEY`
+- `HYPATIA_SEARCH_EMBEDDING_OPENAI_BASE_URL`
+
 The first Postgres schema lives at:
 
 - `services/api/app/schema.sql`
@@ -156,8 +168,10 @@ The `claims` table now stores richer search metadata as well:
 
 - evidence and context fields needed for retrieval
 - a durable `search_text` projection for lexical search
-- a persisted local embedding vector so hybrid ranking does not need to
+- a persisted embedding payload for hybrid ranking so the API does not need to
   reconstruct every claim representation from scratch
+- a pgvector-backed `search_embedding_vector` column when the extension is
+  enabled during DB bootstrap
 
 ## Local development bootstrap
 
@@ -179,7 +193,7 @@ The quickest way to run the first durable V2 stack locally is:
 
 Supporting files:
 
-- `compose.v2.yml` starts the local Postgres container
+- `compose.v2.yml` starts the local pgvector-enabled Postgres container
 - `services/api/scripts/init_db.py` applies `schema.sql`
 - `services/api/.env.example`, `services/worker/.env.example`, and `apps/web/.env.example` show the expected local environment variables
 - accepted uploaded files are stored under `data/v2-uploads/` when the local upload storage backend is active

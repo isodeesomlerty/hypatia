@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import type { WorkspaceSnapshot } from "../lib/types";
+import type { WorkspaceSearchResponse, WorkspaceSnapshot } from "../lib/types";
 import { AuthControls } from "./authControls";
 import { KnowledgePanel } from "./knowledgePanel";
 import { ResearchGraph } from "./researchGraph";
@@ -87,6 +87,7 @@ export function WorkspaceLiveShell({
   initialSnapshot,
 }: WorkspaceLiveShellProps) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
+  const [searchResult, setSearchResult] = useState<WorkspaceSearchResponse | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const intervalRef = useRef<number | null>(null);
   const refreshInFlightRef = useRef(false);
@@ -285,7 +286,10 @@ export function WorkspaceLiveShell({
       <section className="workspace-grid">
         <article className="workspace-panel map-panel">
           <div className="section-label">Research map</div>
-          <WorkspaceSearchPanel workspaceId={workspaceId} />
+          <WorkspaceSearchPanel
+            workspaceId={workspaceId}
+            onResultChange={setSearchResult}
+          />
           <div className="layer-row">
             {visibleLayers.map((layer) => (
               <span className="layer-chip" key={layer}>
@@ -298,6 +302,7 @@ export function WorkspaceLiveShell({
             graph={workspace.graph.graph}
             selectedPaperId={selectedPaper?.paper.paper_id ?? null}
             selectedRelationshipId={selectedRelationship?.relationship.relationship_id ?? null}
+            highlightedPaperIds={searchResult?.paper_ids ?? []}
           />
           <p className="panel-note">
             This V2 graph now refreshes from durable workspace state while ingestion and

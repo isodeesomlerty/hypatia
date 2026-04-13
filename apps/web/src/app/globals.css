@@ -528,6 +528,13 @@ a {
   transition: opacity 160ms ease, stroke-width 160ms ease;
 }
 
+.graph-canvas--search-focus .graph-edge-line {
+  transition:
+    opacity 160ms ease,
+    stroke-width 160ms ease,
+    filter 160ms ease;
+}
+
 .graph-edge-hitarea {
   stroke: transparent;
   stroke-width: 20;
@@ -559,6 +566,15 @@ a {
   filter: drop-shadow(0 0 12px rgba(58, 42, 28, 0.18));
 }
 
+.graph-edge-line--search-match {
+  opacity: 1;
+  filter: drop-shadow(0 0 10px rgba(177, 105, 59, 0.12));
+}
+
+.graph-edge-line--search-muted {
+  opacity: 0.22;
+}
+
 .graph-edge-group:hover .graph-edge-line {
   opacity: 1;
 }
@@ -579,6 +595,15 @@ a {
   transform: scale(1.03);
 }
 
+.graph-node-circle--search-match {
+  fill: rgba(255, 248, 238, 1);
+  stroke: rgba(177, 105, 59, 0.48);
+}
+
+.graph-node-circle--search-muted {
+  opacity: 0.36;
+}
+
 .graph-node-text {
   fill: var(--accent);
   font-size: 0.9rem;
@@ -589,6 +614,11 @@ a {
   fill: var(--ink);
   font-size: 0.92rem;
   font-weight: 600;
+}
+
+.graph-node-text--search-muted,
+.graph-node-label--search-muted {
+  opacity: 0.4;
 }
 
 .detail-panel {

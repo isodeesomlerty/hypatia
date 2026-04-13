@@ -14,6 +14,7 @@ except ImportError:  # pragma: no cover - local bootstrap guard
 DEFAULT_DATABASE_URL = "postgresql://hypatia:hypatia@127.0.0.1:5432/hypatia"
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "app" / "schema.sql"
+EMBEDDING_DIMENSIONS = int(os.getenv("HYPATIA_SEARCH_EMBEDDING_DIMENSIONS", "256"))
 
 
 def parse_args() -> argparse.Namespace:
@@ -169,6 +170,26 @@ def apply_schema(connection) -> None:
             ON claims USING GIN (to_tsvector('simple', search_text))
             """
         )
+        cursor.execute("SAVEPOINT hypatia_vector_setup")
+        try:
+            cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            cursor.execute(
+                """
+                ALTER TABLE claims
+                ADD COLUMN IF NOT EXISTS search_embedding_vector VECTOR(%s)
+                """
+                % EMBEDDING_DIMENSIONS
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_claims_search_embedding_vector
+                ON claims USING hnsw (search_embedding_vector vector_cosine_ops)
+                """
+            )
+        except Exception:
+            cursor.execute("ROLLBACK TO SAVEPOINT hypatia_vector_setup")
+        finally:
+            cursor.execute("RELEASE SAVEPOINT hypatia_vector_setup")
 
 
 def seed_demo_data(connection) -> None:

@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 
 import type { WorkspaceSearchResponse } from "../lib/types";
 
 type WorkspaceSearchPanelProps = {
   workspaceId: string;
+  onResultChange?: (result: WorkspaceSearchResponse | null) => void;
 };
 
 function formatLabel(value: string) {
@@ -29,11 +30,18 @@ function paperMeta(match: WorkspaceSearchResponse["matches"][number]) {
   return bits.join(" · ");
 }
 
-export function WorkspaceSearchPanel({ workspaceId }: WorkspaceSearchPanelProps) {
+export function WorkspaceSearchPanel({
+  workspaceId,
+  onResultChange,
+}: WorkspaceSearchPanelProps) {
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<WorkspaceSearchResponse | null>(null);
   const [error, setError] = useState("");
   const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    onResultChange?.(result);
+  }, [onResultChange, result]);
 
   function clearSearch() {
     setQuery("");
@@ -63,6 +71,7 @@ export function WorkspaceSearchPanel({ workspaceId }: WorkspaceSearchPanelProps)
       });
       const payload = (await response.json()) as WorkspaceSearchResponse | { detail?: string };
       if (!response.ok) {
+        setResult(null);
         setError(
           "detail" in payload && payload.detail
             ? payload.detail
@@ -71,6 +80,7 @@ export function WorkspaceSearchPanel({ workspaceId }: WorkspaceSearchPanelProps)
         return;
       }
       if (!("matches" in payload)) {
+        setResult(null);
         setError("The search response was not recognized.");
         return;
       }
@@ -120,6 +130,7 @@ export function WorkspaceSearchPanel({ workspaceId }: WorkspaceSearchPanelProps)
             </span>
           </div>
           <p className="panel-note">{result.summary}</p>
+          <p className="panel-note">Matching papers are highlighted in the graph while this result set is active.</p>
           {result.matches.length ? (
             <div className="search-result-list">
               {result.matches.map((match) => (

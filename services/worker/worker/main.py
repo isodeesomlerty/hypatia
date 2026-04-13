@@ -31,7 +31,8 @@ from research_graph.pipeline import (
     compare_papers,
 )
 from worker.config import settings
-from worker.search_index import build_claim_search_text, embed_text
+from worker.embeddings import embed_search_texts, vector_literal
+from worker.search_index import EMBEDDING_DIMENSIONS, build_claim_search_text
 from worker.storage import get_upload_materializer
 
 
@@ -834,6 +835,20 @@ def _load_paper_row(connection, workspace_id: str, paper_id: str):
         return cursor.fetchone()
 
 
+def _pgvector_enabled(connection) -> bool:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = 'claims'
+              AND column_name = 'search_embedding_vector'
+            LIMIT 1
+            """
+        )
+        return cursor.fetchone() is not None
+
+
 def _load_claim_rows(connection, workspace_id: str, paper_id: str) -> list[dict]:
     with connection.cursor() as cursor:
         cursor.execute(
@@ -938,6 +953,30 @@ def _sync_paper_analysis(
 ) -> None:
     paper_title = analyzed_paper.get("title") or "Untitled paper"
     paper_authors = analyzed_paper.get("authors", [])
+    vector_enabled = _pgvector_enabled(connection)
+    claim_rows = []
+    for claim in analyzed_paper.get("claims", []):
+        key_variables = claim.get("key_variables") or []
+        search_text = build_claim_search_text(
+            paper_title=paper_title,
+            paper_authors=paper_authors,
+            claim=claim,
+        )
+        claim_rows.append(
+            {
+                "claim_id": claim.get("claim_id"),
+                "text": claim.get("claim", "").strip(),
+                "claim_type": claim.get("claim_type", "descriptive"),
+                "evidence_type": claim.get("evidence_type", "other"),
+                "evidence_strength": claim.get("evidence_strength", "moderate"),
+                "evidence_reasoning": claim.get("evidence_reasoning", ""),
+                "key_variables": key_variables,
+                "context": claim.get("context", ""),
+                "search_text": search_text,
+            }
+        )
+    embeddings, _ = embed_search_texts([row["search_text"] for row in claim_rows]) if claim_rows else ([], "local")
+
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -968,14 +1007,40 @@ def _sync_paper_analysis(
             """,
             (workspace_id, paper_id),
         )
-        for claim in analyzed_paper.get("claims", []):
-            key_variables = claim.get("key_variables") or []
-            search_text = build_claim_search_text(
-                paper_title=paper_title,
-                paper_authors=paper_authors,
-                claim=claim,
-            )
-            search_embedding = embed_text(search_text)
+        for row, search_embedding in zip(claim_rows, embeddings):
+            if vector_enabled:
+                cursor.execute(
+                    """
+                    INSERT INTO claims (
+                      id, workspace_id, paper_id, text, claim_type,
+                      evidence_type, evidence_strength, evidence_reasoning,
+                      key_variables, context, search_text, search_embedding,
+                      search_embedding_vector
+                    )
+                    VALUES (
+                      %s, %s, %s, %s, %s,
+                      %s, %s, %s,
+                      %s::jsonb, %s, %s, %s::jsonb,
+                      %s::vector
+                    )
+                    """,
+                    (
+                        row["claim_id"],
+                        workspace_id,
+                        paper_id,
+                        row["text"],
+                        row["claim_type"],
+                        row["evidence_type"],
+                        row["evidence_strength"],
+                        row["evidence_reasoning"],
+                        json.dumps(row["key_variables"]),
+                        row["context"],
+                        row["search_text"],
+                        json.dumps(search_embedding),
+                        vector_literal(search_embedding),
+                    ),
+                )
+                continue
             cursor.execute(
                 """
                 INSERT INTO claims (
@@ -990,17 +1055,17 @@ def _sync_paper_analysis(
                 )
                 """,
                 (
-                    claim.get("claim_id"),
+                    row["claim_id"],
                     workspace_id,
                     paper_id,
-                    claim.get("claim", "").strip(),
-                    claim.get("claim_type", "descriptive"),
-                    claim.get("evidence_type", "other"),
-                    claim.get("evidence_strength", "moderate"),
-                    claim.get("evidence_reasoning", ""),
-                    json.dumps(key_variables),
-                    claim.get("context", ""),
-                    search_text,
+                    row["text"],
+                    row["claim_type"],
+                    row["evidence_type"],
+                    row["evidence_strength"],
+                    row["evidence_reasoning"],
+                    json.dumps(row["key_variables"]),
+                    row["context"],
+                    row["search_text"],
                     json.dumps(search_embedding),
                 ),
             )
@@ -1019,7 +1084,8 @@ def _should_refresh_claims(
     if existing_ids != analyzed_ids:
         return True
     return any(
-        not row.get("search_text") or not (row.get("search_embedding") or [])
+        not row.get("search_text")
+        or len(row.get("search_embedding") or []) != EMBEDDING_DIMENSIONS
         for row in existing_claim_rows
     )
 

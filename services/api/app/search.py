@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 from collections import Counter
 from dataclasses import dataclass
 
 
 TOKEN_RE = re.compile(r"[a-z0-9]+")
-EMBEDDING_DIMENSIONS = 128
+EMBEDDING_DIMENSIONS = int(os.getenv("HYPATIA_SEARCH_EMBEDDING_DIMENSIONS", "256"))
 
 
 def tokenize(text: str) -> list[str]:
@@ -94,6 +95,7 @@ def search_workspace_claims(
     papers: list[dict],
     *,
     limit: int = 12,
+    search_mode: str = "hybrid_claim_ranking",
 ) -> dict:
     query_tokens = tokenize(query)
     query_counts = Counter(query_tokens)
@@ -107,7 +109,7 @@ def search_workspace_claims(
             "paper_ids": [],
             "matching_claim_ids": [],
             "used_fallback": False,
-            "search_mode": "hybrid_claim_ranking",
+            "search_mode": search_mode,
         }
 
     normalized_query = query.lower().strip()
@@ -170,7 +172,7 @@ def search_workspace_claims(
             "paper_ids": [],
             "matching_claim_ids": [],
             "used_fallback": False,
-            "search_mode": "hybrid_claim_ranking",
+            "search_mode": search_mode,
         }
 
     claim_preview = "; ".join(
@@ -204,5 +206,5 @@ def search_workspace_claims(
         "paper_ids": paper_ids,
         "matching_claim_ids": matching_claim_ids,
         "used_fallback": False,
-        "search_mode": "hybrid_claim_ranking",
+        "search_mode": search_mode,
     }
