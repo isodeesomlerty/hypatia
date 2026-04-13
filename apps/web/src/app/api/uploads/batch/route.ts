@@ -5,13 +5,29 @@ import { getViewerRequestHeaders } from "../../../../lib/viewer";
 
 export async function POST(request: Request) {
   try {
-    const formData = await request.formData();
     const authHeaders = await getViewerRequestHeaders();
-    const response = await fetch(`${getApiBaseUrl()}/v1/uploads/batch-files`, {
-      method: "POST",
-      body: formData,
-      headers: authHeaders,
-    });
+    const contentType = request.headers.get("content-type") ?? "";
+    let response: Response;
+
+    if (contentType.includes("application/json")) {
+      const body = await request.text();
+      response = await fetch(`${getApiBaseUrl()}/v1/uploads/batch`, {
+        method: "POST",
+        body,
+        headers: {
+          ...authHeaders,
+          "content-type": "application/json",
+        },
+      });
+    } else {
+      const formData = await request.formData();
+      response = await fetch(`${getApiBaseUrl()}/v1/uploads/batch-files`, {
+        method: "POST",
+        body: formData,
+        headers: authHeaders,
+      });
+    }
+
     const responseText = await response.text();
     return new NextResponse(responseText, {
       status: response.status,

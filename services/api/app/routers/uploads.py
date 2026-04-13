@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.auth import ViewerContext, get_viewer_context
+from app.config import settings
 from app.models import (
+    DirectUploadReservationItem,
+    DirectUploadReservationRequest,
+    DirectUploadReservationResponse,
     UploadBatchCreateRequest,
     UploadBatchCreateResponse,
     UploadItemInput,
@@ -38,12 +44,96 @@ def _validation_error(
     return None
 
 
+def _build_reservation_items(
+    request: DirectUploadReservationRequest,
+) -> DirectUploadReservationResponse:
+    storage = get_upload_storage()
+    seen_hashes: set[str] = set()
+    items: list[DirectUploadReservationItem] = []
+
+    for index, item in enumerate(request.items):
+        duplicate_in_batch = False
+        if item.sha256:
+            duplicate_in_batch = item.sha256 in seen_hashes
+        validation_error = _validation_error(
+            request.source_kind,
+            item.filename,
+            index,
+            duplicate_in_batch=duplicate_in_batch,
+        )
+        if validation_error is None and not item.size_bytes:
+            validation_error = "Rejected. Empty files cannot be ingested."
+        if validation_error is None and not item.sha256:
+            validation_error = "Rejected. Direct uploads require a SHA-256 checksum."
+
+        if validation_error is None:
+            reserved = storage.create_direct_upload(
+                workspace_id=request.workspace_id,
+                filename=item.filename,
+                media_type=item.media_type,
+                size_bytes=item.size_bytes,
+                sha256=item.sha256,
+            )
+            seen_hashes.add(reserved.sha256 or "")
+            items.append(
+                DirectUploadReservationItem(
+                    filename=item.filename,
+                    media_type=item.media_type,
+                    size_bytes=item.size_bytes,
+                    sha256=item.sha256,
+                    status="accepted",
+                    message="Accepted for direct object-storage upload.",
+                    storage_backend=reserved.storage_backend,
+                    storage_key=reserved.storage_key,
+                    upload_url=reserved.upload_url,
+                    upload_method=reserved.upload_method,
+                    upload_headers=reserved.upload_headers,
+                )
+            )
+            continue
+
+        items.append(
+            DirectUploadReservationItem(
+                filename=item.filename,
+                media_type=item.media_type,
+                size_bytes=item.size_bytes,
+                sha256=item.sha256,
+                status="rejected",
+                message=validation_error,
+            )
+        )
+
+    return DirectUploadReservationResponse(
+        workspace_id=request.workspace_id,
+        source_kind=request.source_kind,
+        upload_strategy="direct_to_object_storage",
+        items=items,
+    )
+
+
 @router.post("/batch", response_model=UploadBatchCreateResponse)
 def create_batch_upload(
     request: UploadBatchCreateRequest,
     viewer: ViewerContext = Depends(get_viewer_context),
 ) -> UploadBatchCreateResponse:
     return create_upload_batch(request, viewer)
+
+
+@router.post("/direct-batch", response_model=DirectUploadReservationResponse)
+def reserve_direct_batch_upload(
+    request: DirectUploadReservationRequest,
+    viewer: ViewerContext = Depends(get_viewer_context),
+) -> DirectUploadReservationResponse:
+    viewer.require_workspace(request.workspace_id)
+    if settings.upload_storage_backend.lower() != "s3":
+        raise HTTPException(
+            status_code=400,
+            detail="Direct object-storage uploads require an S3-backed upload backend.",
+        )
+    try:
+        return _build_reservation_items(request)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/batch-files", response_model=UploadBatchCreateResponse)
@@ -67,8 +157,6 @@ async def create_batch_file_upload(
         duplicate_in_batch = False
 
         if payload:
-            import hashlib
-
             digest = hashlib.sha256(payload).hexdigest()
             duplicate_in_batch = digest in seen_hashes
             validation_error = _validation_error(

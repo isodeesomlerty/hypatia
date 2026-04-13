@@ -148,6 +148,27 @@ export type UploadBatchSummary = {
   items: UploadItemResult[];
 };
 
+export type DirectUploadReservationItem = {
+  filename: string;
+  media_type: string | null;
+  size_bytes: number | null;
+  sha256: string | null;
+  status: "accepted" | "rejected";
+  message: string;
+  storage_backend: string | null;
+  storage_key: string | null;
+  upload_url: string | null;
+  upload_method: string | null;
+  upload_headers: Record<string, string>;
+};
+
+export type DirectUploadReservationResponse = {
+  workspace_id: string;
+  source_kind: "pdf_batch" | "zip_import";
+  upload_strategy: string;
+  items: DirectUploadReservationItem[];
+};
+
 export type WorkspaceBatchListResponse = {
   workspace_id: string;
   batches: UploadBatchSummary[];

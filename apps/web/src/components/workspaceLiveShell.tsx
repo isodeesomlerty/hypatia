@@ -198,7 +198,10 @@ export function WorkspaceLiveShell({
       <section className="ingestion-grid">
         <article className="workspace-panel">
           <div className="section-label">Bulk corpus ingestion</div>
-          <UploadBatchPanel workspaceId={workspaceId} />
+          <UploadBatchPanel
+            workspaceId={workspaceId}
+            activeStorageBackend={workspace.meta.active_storage_backend}
+          />
           <div className="option-grid option-grid--supporting">
             {uploadModes.map((mode) => (
               <div className="option-card" key={mode.title}>

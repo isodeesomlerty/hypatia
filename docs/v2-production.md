@@ -62,6 +62,7 @@ The production API now exposes the first batch-ingestion-facing contracts:
 - `GET /v1/workspaces/{workspace_id}/jobs`
 - `GET /v1/workspaces/{workspace_id}/batches`
 - `POST /v1/uploads/batch`
+- `POST /v1/uploads/direct-batch`
 - `POST /v1/uploads/batch-files`
 - `GET /v1/uploads/batch/{batch_id}`
 - `GET /v1/jobs/{job_id}`
@@ -106,6 +107,11 @@ Uploaded files now have a separate storage backend:
   `data/v2-uploads/`
 - `HYPATIA_UPLOAD_STORAGE_BACKEND=s3` stores accepted files in an
   S3-compatible bucket and lets the worker materialize them on demand
+
+When the upload backend is S3-compatible, the web app now reserves presigned
+direct-upload targets first, uploads browser file bytes straight to object
+storage, and then finalizes the ingestion batch through the API using the
+stored object metadata.
 
 S3-compatible upload storage uses:
 

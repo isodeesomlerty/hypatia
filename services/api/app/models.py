@@ -173,6 +173,40 @@ class UploadItemInput(BaseModel):
     validation_error: str | None = None
 
 
+class DirectUploadItemRequest(BaseModel):
+    filename: str
+    media_type: str | None = None
+    size_bytes: int | None = None
+    sha256: str | None = None
+
+
+class DirectUploadReservationItem(BaseModel):
+    filename: str
+    media_type: str | None = None
+    size_bytes: int | None = None
+    sha256: str | None = None
+    status: UploadItemStatus
+    message: str
+    storage_backend: str | None = None
+    storage_key: str | None = None
+    upload_url: str | None = None
+    upload_method: str | None = None
+    upload_headers: dict[str, str] = Field(default_factory=dict)
+
+
+class DirectUploadReservationRequest(BaseModel):
+    workspace_id: str
+    source_kind: UploadSourceKind
+    items: list[DirectUploadItemRequest] = Field(default_factory=list)
+
+
+class DirectUploadReservationResponse(BaseModel):
+    workspace_id: str
+    source_kind: UploadSourceKind
+    upload_strategy: str
+    items: list[DirectUploadReservationItem] = Field(default_factory=list)
+
+
 class UploadItemResult(BaseModel):
     filename: str
     media_type: str | None = None

@@ -24,6 +24,19 @@ class StoredUpload:
     storage_key: str
 
 
+@dataclass(frozen=True)
+class ReservedDirectUpload:
+    filename: str
+    media_type: str | None
+    size_bytes: int | None
+    sha256: str | None
+    storage_backend: str
+    storage_key: str
+    upload_url: str
+    upload_method: str
+    upload_headers: dict[str, str]
+
+
 class UploadStorage(Protocol):
     def store_bytes(
         self,
@@ -33,6 +46,16 @@ class UploadStorage(Protocol):
         media_type: str | None,
         content: bytes,
     ) -> StoredUpload: ...
+
+    def create_direct_upload(
+        self,
+        *,
+        workspace_id: str,
+        filename: str,
+        media_type: str | None,
+        size_bytes: int | None,
+        sha256: str | None,
+    ) -> ReservedDirectUpload: ...
 
 
 def _slugify_filename(filename: str) -> str:
@@ -67,6 +90,17 @@ class LocalUploadStorage:
             storage_backend="local",
             storage_key=object_key,
         )
+
+    def create_direct_upload(
+        self,
+        *,
+        workspace_id: str,
+        filename: str,
+        media_type: str | None,
+        size_bytes: int | None,
+        sha256: str | None,
+    ) -> ReservedDirectUpload:
+        raise RuntimeError("Direct upload reservations are only supported for S3 storage.")
 
 
 class S3UploadStorage:
@@ -132,6 +166,53 @@ class S3UploadStorage:
             sha256=digest,
             storage_backend="s3",
             storage_key=object_key,
+        )
+
+    def create_direct_upload(
+        self,
+        *,
+        workspace_id: str,
+        filename: str,
+        media_type: str | None,
+        size_bytes: int | None,
+        sha256: str | None,
+    ) -> ReservedDirectUpload:
+        safe_name = _slugify_filename(filename)
+        object_key = f"{workspace_id}/{uuid4().hex[:10]}-{safe_name}"
+        if self.prefix:
+            object_key = f"{self.prefix}/{object_key}"
+        content_type = media_type or "application/octet-stream"
+        metadata = {
+            "original-filename": filename,
+        }
+        if sha256:
+            metadata["sha256"] = sha256
+        upload_url = self.client.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": self.bucket,
+                "Key": object_key,
+                "ContentType": content_type,
+                "Metadata": metadata,
+            },
+            ExpiresIn=3600,
+            HttpMethod="PUT",
+        )
+        headers = {
+            "content-type": content_type,
+        }
+        for key, value in metadata.items():
+            headers[f"x-amz-meta-{key}"] = value
+        return ReservedDirectUpload(
+            filename=filename,
+            media_type=media_type,
+            size_bytes=size_bytes,
+            sha256=sha256,
+            storage_backend="s3",
+            storage_key=object_key,
+            upload_url=upload_url,
+            upload_method="PUT",
+            upload_headers=headers,
         )
 
 
