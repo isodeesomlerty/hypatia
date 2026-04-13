@@ -48,7 +48,7 @@ The Python background worker. This will own:
 1. Add auth and workspace identity to the web and API layers.
 2. Introduce Postgres models for workspaces, papers, claims, relationships, and jobs.
 3. Add object-storage-backed upload ingestion for PDFs and ZIPs.
-4. Persist the full paper-analysis outputs in V2 storage instead of leaning on the prototype cache.
+4. Expose paper and relationship detail payloads through the V2 API and web UI.
 5. Recreate the current graph and knowledge-panel flows against API data.
 
 ## Current API scaffold
@@ -115,6 +115,10 @@ That schema covers:
 - upload batches and upload batch items
 - claims and claim relationships
 
+The `papers` table now also stores the full analyzed paper payload so the worker
+can reload real metadata and claims from V2 storage without depending on the
+prototype cache for newly ingested PDFs.
+
 ## Local development bootstrap
 
 The quickest way to run the first durable V2 stack locally is:
@@ -157,6 +161,7 @@ The worker now processes queued `batch_ingestion` jobs by:
 The worker also processes queued `pairwise_comparison` jobs by:
 
 - reusing the prototype pairwise comparison pipeline when source PDFs or cached analysis are available
+- reusing the analyzed payload stored in Postgres before falling back to older prototype cache artifacts
 - writing claim-level relationships into the V2 database
 - resolving pending paper-relationship edges into ready graph edges
 - updating batch progress counts as comparisons finish

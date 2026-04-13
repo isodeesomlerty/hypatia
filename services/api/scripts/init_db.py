@@ -62,6 +62,12 @@ def apply_schema(connection) -> None:
         )
         cursor.execute(
             """
+            ALTER TABLE papers
+            ADD COLUMN IF NOT EXISTS analysis_payload JSONB NOT NULL DEFAULT '{}'::jsonb
+            """
+        )
+        cursor.execute(
+            """
             ALTER TABLE jobs
             ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb
             """

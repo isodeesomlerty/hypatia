@@ -536,6 +536,7 @@ def _load_paper_row(connection, workspace_id: str, paper_id: str):
               status,
               source_filename,
               source_sha256,
+              analysis_payload,
               storage_backend,
               storage_key
             FROM papers
@@ -579,6 +580,21 @@ def _load_cached_analysis(source_sha256: str | None) -> dict | None:
     except (OSError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _load_stored_analysis_payload(paper_row) -> dict | None:
+    payload = paper_row.get("analysis_payload") or {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(payload, dict):
+        return None
+    claims = payload.get("claims")
+    if not isinstance(claims, list) or not claims:
+        return None
+    return payload
 
 
 def _stored_pdf_path(paper_row) -> Path | None:
@@ -630,13 +646,15 @@ def _sync_paper_analysis(
             UPDATE papers
             SET title = %s,
                 authors = %s::jsonb,
-                publication_year = %s
+                publication_year = %s,
+                analysis_payload = %s::jsonb
             WHERE workspace_id = %s AND id = %s
             """,
             (
                 analyzed_paper.get("title") or "Untitled paper",
                 json.dumps(analyzed_paper.get("authors", [])),
                 analyzed_paper.get("year"),
+                json.dumps(analyzed_paper),
                 workspace_id,
                 paper_id,
             ),
@@ -691,6 +709,17 @@ def _load_runtime_paper_record(
         raise ResearchGraphError(f"Paper {paper_id} was not found in workspace {workspace_id}.")
 
     claim_rows = _load_claim_rows(connection, workspace_id, paper_id)
+    stored_analysis = _load_stored_analysis_payload(paper_row)
+    if stored_analysis is not None:
+        _sync_paper_analysis(
+            connection,
+            workspace_id,
+            paper_id,
+            stored_analysis,
+            refresh_claims=_should_refresh_claims(claim_rows, stored_analysis),
+        )
+        return stored_analysis
+
     cached_analysis = _load_cached_analysis(paper_row.get("source_sha256"))
     if cached_analysis is not None:
         _sync_paper_analysis(
@@ -707,7 +736,7 @@ def _load_runtime_paper_record(
         analyzed = analyze_pdf(
             stored_path,
             manifest=load_manifest(),
-            persist=True,
+            persist=False,
             progress_callback=None,
         )
         _sync_paper_analysis(
@@ -864,7 +893,7 @@ def process_next_batch_job() -> bool:
                 analyzed_paper = analyze_pdf(
                     stored_path,
                     manifest=analysis_manifest,
-                    persist=True,
+                    persist=False,
                     progress_callback=None,
                 )
             except Exception as exc:

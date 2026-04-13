@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS papers (
   status TEXT NOT NULL,
   source_filename TEXT,
   source_sha256 TEXT,
+  analysis_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
   storage_backend TEXT,
   storage_key TEXT
 );
