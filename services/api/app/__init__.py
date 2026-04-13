@@ -1,0 +1,1 @@
+"""Hypatia API service package."""

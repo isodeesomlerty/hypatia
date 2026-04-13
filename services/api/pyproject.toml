@@ -1,0 +1,15 @@
+[project]
+name = "hypatia-api"
+version = "0.1.0"
+description = "API service for the Hypatia production architecture."
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "pydantic>=2.9,<3",
+  "psycopg[binary]>=3.2,<4",
+  "uvicorn>=0.32,<1"
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
