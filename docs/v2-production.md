@@ -100,6 +100,23 @@ The API now chooses its storage backend through configuration:
 
 Fallback behavior is controlled by `HYPATIA_ALLOW_DEMO_FALLBACK`.
 
+Uploaded files now have a separate storage backend:
+
+- `HYPATIA_UPLOAD_STORAGE_BACKEND=local` stores accepted files under
+  `data/v2-uploads/`
+- `HYPATIA_UPLOAD_STORAGE_BACKEND=s3` stores accepted files in an
+  S3-compatible bucket and lets the worker materialize them on demand
+
+S3-compatible upload storage uses:
+
+- `HYPATIA_UPLOAD_STORAGE_S3_BUCKET`
+- `HYPATIA_UPLOAD_STORAGE_S3_REGION`
+- `HYPATIA_UPLOAD_STORAGE_S3_ENDPOINT_URL`
+- `HYPATIA_UPLOAD_STORAGE_S3_ACCESS_KEY_ID`
+- `HYPATIA_UPLOAD_STORAGE_S3_SECRET_ACCESS_KEY`
+- `HYPATIA_UPLOAD_STORAGE_S3_PREFIX`
+- `HYPATIA_UPLOAD_STORAGE_S3_FORCE_PATH_STYLE`
+
 The first Postgres schema lives at:
 
 - `services/api/app/schema.sql`
@@ -142,7 +159,7 @@ Supporting files:
 - `compose.v2.yml` starts the local Postgres container
 - `services/api/scripts/init_db.py` applies `schema.sql`
 - `services/api/.env.example`, `services/worker/.env.example`, and `apps/web/.env.example` show the expected local environment variables
-- accepted uploaded files are stored under `data/v2-uploads/` by the local upload storage backend
+- accepted uploaded files are stored under `data/v2-uploads/` when the local upload storage backend is active
 
 The worker now also expects:
 
@@ -152,7 +169,7 @@ The worker now also expects:
 
 The worker now processes queued `batch_ingestion` jobs by:
 
-- reading accepted files from local upload storage
+- reading accepted files from the configured upload storage backend
 - running the prototype paper-analysis pipeline against uploaded PDFs
 - creating new `papers` rows with analyzed metadata
 - skipping duplicate PDFs within the same workspace using file hashes
@@ -161,6 +178,7 @@ The worker now processes queued `batch_ingestion` jobs by:
 The worker also processes queued `pairwise_comparison` jobs by:
 
 - reusing the prototype pairwise comparison pipeline when source PDFs or cached analysis are available
+- materializing source PDFs from local disk or S3-compatible object storage before analysis when needed
 - reusing the analyzed payload stored in Postgres before falling back to older prototype cache artifacts
 - writing claim-level relationships into the V2 database
 - resolving pending paper-relationship edges into ready graph edges

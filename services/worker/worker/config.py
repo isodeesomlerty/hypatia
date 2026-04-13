@@ -21,8 +21,24 @@ class WorkerSettings:
         "postgresql://hypatia:hypatia@127.0.0.1:5432/hypatia",
     )
     poll_interval_seconds: float = float(os.getenv("HYPATIA_WORKER_POLL_SECONDS", "2.0"))
+    upload_storage_backend: str = os.getenv("HYPATIA_UPLOAD_STORAGE_BACKEND", "local")
     upload_storage_root: str = _resolve_repo_path(
         os.getenv("HYPATIA_UPLOAD_STORAGE_ROOT", "data/v2-uploads")
+    )
+    upload_storage_s3_bucket: str = os.getenv("HYPATIA_UPLOAD_STORAGE_S3_BUCKET", "")
+    upload_storage_s3_region: str = os.getenv("HYPATIA_UPLOAD_STORAGE_S3_REGION", "")
+    upload_storage_s3_endpoint_url: str = os.getenv(
+        "HYPATIA_UPLOAD_STORAGE_S3_ENDPOINT_URL", ""
+    )
+    upload_storage_s3_access_key_id: str = os.getenv(
+        "HYPATIA_UPLOAD_STORAGE_S3_ACCESS_KEY_ID", ""
+    )
+    upload_storage_s3_secret_access_key: str = os.getenv(
+        "HYPATIA_UPLOAD_STORAGE_S3_SECRET_ACCESS_KEY", ""
+    )
+    upload_storage_s3_prefix: str = os.getenv("HYPATIA_UPLOAD_STORAGE_S3_PREFIX", "uploads")
+    upload_storage_s3_force_path_style: bool = (
+        os.getenv("HYPATIA_UPLOAD_STORAGE_S3_FORCE_PATH_STYLE", "0") == "1"
     )
 
 

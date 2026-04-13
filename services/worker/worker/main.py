@@ -6,6 +6,7 @@ import json
 import re
 import sys
 import time
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -29,6 +30,7 @@ from research_graph.pipeline import (
     compare_papers,
 )
 from worker.config import settings
+from worker.storage import get_upload_materializer
 
 
 SUPPORTED_JOB_TYPES = [
@@ -597,16 +599,15 @@ def _load_stored_analysis_payload(paper_row) -> dict | None:
     return payload
 
 
-def _stored_pdf_path(paper_row) -> Path | None:
-    if paper_row.get("storage_backend") != "local":
-        return None
+def _stored_pdf_path_context(paper_row):
+    storage_backend = paper_row.get("storage_backend")
     storage_key = paper_row.get("storage_key")
-    if not storage_key:
-        return None
-    stored_path = Path(settings.upload_storage_root) / storage_key
-    if stored_path.exists():
-        return stored_path
-    return None
+    if not storage_backend or not storage_key:
+        return nullcontext(None)
+    return get_upload_materializer().materialize(
+        storage_backend=storage_backend,
+        storage_key=storage_key,
+    )
 
 
 def _paper_record_from_claim_rows(paper_row, claim_rows: list[dict]) -> dict:
@@ -731,22 +732,25 @@ def _load_runtime_paper_record(
         )
         return cached_analysis
 
-    stored_path = _stored_pdf_path(paper_row)
-    if stored_path is not None:
-        analyzed = analyze_pdf(
-            stored_path,
-            manifest=load_manifest(),
-            persist=False,
-            progress_callback=None,
-        )
-        _sync_paper_analysis(
-            connection,
-            workspace_id,
-            paper_id,
-            analyzed,
-            refresh_claims=_should_refresh_claims(claim_rows, analyzed),
-        )
-        return analyzed
+    try:
+        with _stored_pdf_path_context(paper_row) as stored_path:
+            if stored_path is not None:
+                analyzed = analyze_pdf(
+                    stored_path,
+                    manifest=load_manifest(),
+                    persist=False,
+                    progress_callback=None,
+                )
+                _sync_paper_analysis(
+                    connection,
+                    workspace_id,
+                    paper_id,
+                    analyzed,
+                    refresh_claims=_should_refresh_claims(claim_rows, analyzed),
+                )
+                return analyzed
+    except (FileNotFoundError, RuntimeError):
+        pass
 
     if claim_rows:
         return _paper_record_from_claim_rows(paper_row, claim_rows)
@@ -858,19 +862,7 @@ def process_next_batch_job() -> bool:
         analysis_manifest = load_manifest()
 
         for item in items:
-            storage_key = item["storage_key"]
-            stored_path: Path | None = None
-            if storage_key:
-                stored_path = Path(settings.upload_storage_root) / storage_key
-                if not stored_path.exists():
-                    missing_files += 1
-                    _update_batch_item_message(
-                        connection,
-                        item["id"],
-                        "Stored file missing from local upload storage; ingestion skipped.",
-                    )
-                    continue
-            if stored_path is None:
+            if not item["storage_key"] or not item["storage_backend"]:
                 analysis_failures += 1
                 _update_batch_item_message(
                     connection,
@@ -879,23 +871,35 @@ def process_next_batch_job() -> bool:
                 )
                 continue
 
-            existing = _paper_exists(connection, workspace_id, item["sha256"])
-            if existing is not None:
-                duplicates += 1
+            try:
+                with get_upload_materializer().materialize(
+                    storage_backend=item["storage_backend"],
+                    storage_key=item["storage_key"],
+                ) as stored_path:
+                    existing = _paper_exists(connection, workspace_id, item["sha256"])
+                    if existing is not None:
+                        duplicates += 1
+                        _update_batch_item_message(
+                            connection,
+                            item["id"],
+                            f"Duplicate of existing paper {existing['id']}; not re-ingested.",
+                        )
+                        continue
+
+                    analyzed_paper = analyze_pdf(
+                        stored_path,
+                        manifest=analysis_manifest,
+                        persist=False,
+                        progress_callback=None,
+                    )
+            except FileNotFoundError:
+                missing_files += 1
                 _update_batch_item_message(
                     connection,
                     item["id"],
-                    f"Duplicate of existing paper {existing['id']}; not re-ingested.",
+                    "Stored file missing from configured upload storage; ingestion skipped.",
                 )
                 continue
-
-            try:
-                analyzed_paper = analyze_pdf(
-                    stored_path,
-                    manifest=analysis_manifest,
-                    persist=False,
-                    progress_callback=None,
-                )
             except Exception as exc:
                 analysis_failures += 1
                 _update_batch_item_message(
@@ -1180,7 +1184,9 @@ def main() -> None:
                         "papers that lack source artifacts."
                     ),
                     "database_url": settings.database_url,
+                    "upload_storage_backend": settings.upload_storage_backend,
                     "upload_storage_root": settings.upload_storage_root,
+                    "upload_storage_s3_bucket": settings.upload_storage_s3_bucket,
                 },
                 indent=2,
             )

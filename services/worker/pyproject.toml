@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Worker service for Hypatia ingestion and graph jobs."
 requires-python = ">=3.12"
 dependencies = [
+  "boto3>=1.35,<2",
   "psycopg[binary]>=3.2,<4",
   "requests>=2.32,<3",
   "jsonschema>=4.23,<5",
