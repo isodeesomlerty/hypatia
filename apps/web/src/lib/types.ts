@@ -169,6 +169,30 @@ export type DirectUploadReservationResponse = {
   items: DirectUploadReservationItem[];
 };
 
+export type SearchMatchResult = {
+  paper_id: string;
+  paper_title: string;
+  paper_authors: string[];
+  paper_year: number | null;
+  claim_id: string;
+  claim_text: string;
+  claim_type: string;
+  evidence_strength: string;
+  context: string;
+  score: number;
+};
+
+export type WorkspaceSearchResponse = {
+  workspace_id: string;
+  query: string;
+  summary: string;
+  search_mode: string;
+  used_fallback: boolean;
+  paper_ids: string[];
+  matching_claim_ids: string[];
+  matches: SearchMatchResult[];
+};
+
 export type WorkspaceBatchListResponse = {
   workspace_id: string;
   batches: UploadBatchSummary[];

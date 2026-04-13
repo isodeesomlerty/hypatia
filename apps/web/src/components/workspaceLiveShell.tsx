@@ -7,6 +7,7 @@ import { AuthControls } from "./authControls";
 import { KnowledgePanel } from "./knowledgePanel";
 import { ResearchGraph } from "./researchGraph";
 import { UploadBatchPanel } from "./uploadBatchPanel";
+import { WorkspaceSearchPanel } from "./workspaceSearchPanel";
 import { uploadModes, visibleLayers } from "../lib/demoWorkspace";
 
 type WorkspaceLiveShellProps = {
@@ -284,6 +285,7 @@ export function WorkspaceLiveShell({
       <section className="workspace-grid">
         <article className="workspace-panel map-panel">
           <div className="section-label">Research map</div>
+          <WorkspaceSearchPanel workspaceId={workspaceId} />
           <div className="layer-row">
             {visibleLayers.map((layer) => (
               <span className="layer-chip" key={layer}>

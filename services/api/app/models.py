@@ -224,6 +224,35 @@ class UploadBatchProgress(BaseModel):
     pairwise_pending: int = 0
 
 
+class SearchRequest(BaseModel):
+    query: str
+    limit: int = 12
+
+
+class SearchMatchResult(BaseModel):
+    paper_id: str
+    paper_title: str
+    paper_authors: list[str] = Field(default_factory=list)
+    paper_year: int | None = None
+    claim_id: str
+    claim_text: str
+    claim_type: str = "descriptive"
+    evidence_strength: str = "moderate"
+    context: str = ""
+    score: float = 0.0
+
+
+class WorkspaceSearchResponse(BaseModel):
+    workspace_id: str
+    query: str
+    summary: str
+    search_mode: str
+    used_fallback: bool = True
+    paper_ids: list[str] = Field(default_factory=list)
+    matching_claim_ids: list[str] = Field(default_factory=list)
+    matches: list[SearchMatchResult] = Field(default_factory=list)
+
+
 class UploadBatchSummary(BaseModel):
     batch_id: str
     workspace_id: str

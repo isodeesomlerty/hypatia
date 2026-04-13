@@ -6,10 +6,12 @@ from app.auth import ViewerContext, get_viewer_context
 from app.models import (
     PaperDetailResponse,
     PaperRelationshipDetailResponse,
+    SearchRequest,
     WorkspaceBatchListResponse,
     WorkspaceGraphResponse,
     WorkspaceJobListResponse,
     WorkspacePaperListResponse,
+    WorkspaceSearchResponse,
     WorkspaceSummary,
 )
 from app.store import (
@@ -18,6 +20,7 @@ from app.store import (
     list_workspace_batches,
     get_workspace_graph,
     get_workspace_papers,
+    search_workspace,
     get_workspace_summary,
     list_workspace_jobs,
 )
@@ -79,3 +82,12 @@ def get_workspace_batch_list(
     workspace_id: str, viewer: ViewerContext = Depends(get_viewer_context)
 ) -> WorkspaceBatchListResponse:
     return list_workspace_batches(workspace_id, viewer)
+
+
+@router.post("/{workspace_id}/search", response_model=WorkspaceSearchResponse)
+def search_workspace_claims(
+    workspace_id: str,
+    request: SearchRequest,
+    viewer: ViewerContext = Depends(get_viewer_context),
+) -> WorkspaceSearchResponse:
+    return search_workspace(workspace_id, request, viewer)

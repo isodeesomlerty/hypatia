@@ -32,6 +32,8 @@ from app.models import (
     RelationshipStatus,
     RelationshipAggregate,
     RelationshipAttempt,
+    SearchMatchResult,
+    SearchRequest,
     UploadBatchCreateRequest,
     UploadBatchCreateResponse,
     UploadBatchProgress,
@@ -45,8 +47,10 @@ from app.models import (
     WorkspaceGraphResponse,
     WorkspaceJobListResponse,
     WorkspacePaperListResponse,
+    WorkspaceSearchResponse,
     WorkspaceSummary,
 )
+from app.search import search_workspace_claims
 
 try:
     import psycopg
@@ -129,6 +133,26 @@ def _paper_summary_from_row(row) -> PaperSummary:
     )
 
 
+def _search_paper_from_detail(paper: PaperDetail) -> dict:
+    return {
+        "paper_id": paper.paper_id,
+        "title": paper.title,
+        "authors": paper.authors,
+        "year": paper.year,
+        "claims": [
+            {
+                "claim_id": claim.claim_id,
+                "claim": claim.text,
+                "claim_type": claim.claim_type,
+                "evidence_strength": claim.evidence_strength,
+                "key_variables": claim.key_variables,
+                "context": claim.context,
+            }
+            for claim in paper.claims
+        ],
+    }
+
+
 def _extract_error_kind(progress_label: str) -> str | None:
     match = PAIRWISE_FAILURE_RE.search(progress_label or "")
     if match:
@@ -168,6 +192,13 @@ class WorkspaceRepository(Protocol):
     def list_workspace_batches(
         self, workspace_id: str, viewer: ViewerContext
     ) -> WorkspaceBatchListResponse: ...
+
+    def search_workspace(
+        self,
+        workspace_id: str,
+        request: SearchRequest,
+        viewer: ViewerContext,
+    ) -> WorkspaceSearchResponse: ...
 
     def get_job(self, job_id: str, viewer: ViewerContext) -> JobSummary: ...
 
@@ -678,6 +709,30 @@ class InMemoryWorkspaceRepository:
         )
         return WorkspaceBatchListResponse(workspace_id=workspace_id, batches=batches)
 
+    def search_workspace(
+        self,
+        workspace_id: str,
+        request: SearchRequest,
+        viewer: ViewerContext,
+    ) -> WorkspaceSearchResponse:
+        self._ensure_workspace(workspace_id, viewer)
+        self._assert_workspace_access(workspace_id, viewer)
+        papers = [
+            _search_paper_from_detail(detail)
+            for detail in self._paper_details.get(workspace_id, {}).values()
+        ]
+        result = search_workspace_claims(request.query, papers, limit=request.limit)
+        return WorkspaceSearchResponse(
+            workspace_id=workspace_id,
+            query=request.query,
+            summary=result["summary"],
+            search_mode=result["search_mode"],
+            used_fallback=result["used_fallback"],
+            paper_ids=result["paper_ids"],
+            matching_claim_ids=result["matching_claim_ids"],
+            matches=[SearchMatchResult(**match) for match in result["matches"]],
+        )
+
     def get_job(self, job_id: str, viewer: ViewerContext) -> JobSummary:
         job = self._jobs[job_id]
         self._assert_workspace_access(job.workspace_id, viewer)
@@ -933,6 +988,31 @@ class PostgresWorkspaceRepository:
             health_score=_coerce_health_score(_coerce_json_object(payload.get("health_score"))),
             claims=claims,
         )
+
+    def _workspace_search_papers(self, connection, workspace_id: str) -> list[dict]:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                  id,
+                  workspace_id,
+                  title,
+                  authors,
+                  publication_year,
+                  status,
+                  source_filename,
+                  analysis_payload
+                FROM papers
+                WHERE workspace_id = %s
+                ORDER BY publication_year DESC NULLS LAST, title ASC
+                """,
+                (workspace_id,),
+            )
+            rows = cursor.fetchall()
+        return [
+            _search_paper_from_detail(self._paper_detail_from_row(connection, row))
+            for row in rows
+        ]
 
     def _claim_relationships_for_pair(
         self,
@@ -1359,6 +1439,29 @@ class PostgresWorkspaceRepository:
                 rows = cursor.fetchall()
             batches = [self._batch_from_row(connection, row) for row in rows]
         return WorkspaceBatchListResponse(workspace_id=workspace_id, batches=batches)
+
+    def search_workspace(
+        self,
+        workspace_id: str,
+        request: SearchRequest,
+        viewer: ViewerContext,
+    ) -> WorkspaceSearchResponse:
+        with self._connect() as connection:
+            self._ensure_viewer_seed(connection, viewer)
+            self._assert_workspace_access(connection, workspace_id, viewer)
+            papers = self._workspace_search_papers(connection, workspace_id)
+
+        result = search_workspace_claims(request.query, papers, limit=request.limit)
+        return WorkspaceSearchResponse(
+            workspace_id=workspace_id,
+            query=request.query,
+            summary=result["summary"],
+            search_mode=result["search_mode"],
+            used_fallback=result["used_fallback"],
+            paper_ids=result["paper_ids"],
+            matching_claim_ids=result["matching_claim_ids"],
+            matches=[SearchMatchResult(**match) for match in result["matches"]],
+        )
 
     def get_job(self, job_id: str, viewer: ViewerContext) -> JobSummary:
         with self._connect() as connection:

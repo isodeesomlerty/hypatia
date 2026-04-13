@@ -50,6 +50,7 @@ The Python background worker. This will own:
 3. Add object-storage-backed upload ingestion for PDFs and ZIPs.
 4. Expose paper and relationship detail payloads through the V2 API and web UI.
 5. Recreate the current graph and knowledge-panel flows against API data.
+6. Add researcher-facing search across persisted workspace claims.
 
 ## Current API scaffold
 
@@ -61,6 +62,7 @@ The production API now exposes the first batch-ingestion-facing contracts:
 - `GET /v1/workspaces/{workspace_id}/papers`
 - `GET /v1/workspaces/{workspace_id}/jobs`
 - `GET /v1/workspaces/{workspace_id}/batches`
+- `POST /v1/workspaces/{workspace_id}/search`
 - `POST /v1/uploads/batch`
 - `POST /v1/uploads/direct-batch`
 - `POST /v1/uploads/batch-files`
@@ -73,6 +75,14 @@ shape is aligned with the eventual Postgres + object storage + worker design.
 The V2 web workspace now consumes those API contracts through a typed
 TypeScript fetch layer, with a demo fallback so the shell still renders even
 before the real API and database are fully wired.
+
+The V2 workspace now also includes a first search surface:
+
+- researchers can search across persisted claim text, titles, evidence labels,
+  and claim context within a private workspace
+- search results deep-link back into paper detail views in the knowledge panel
+- this currently uses local ranking over persisted workspace content rather than
+  a dedicated vector index or external search service
 
 For auth, the branch now has a viewer-aware contract end to end:
 

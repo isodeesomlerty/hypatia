@@ -5,6 +5,7 @@ from app.models import (
     JobSummary,
     PaperDetailResponse,
     PaperRelationshipDetailResponse,
+    SearchRequest,
     UploadBatchCreateRequest,
     UploadBatchCreateResponse,
     UploadBatchSummary,
@@ -13,6 +14,7 @@ from app.models import (
     WorkspaceGraphResponse,
     WorkspaceJobListResponse,
     WorkspacePaperListResponse,
+    WorkspaceSearchResponse,
     WorkspaceSummary,
 )
 from app.repository import RepositoryInfo, get_repository, get_repository_info
@@ -68,6 +70,14 @@ def list_workspace_batches(
     workspace_id: str, viewer: ViewerContext
 ) -> WorkspaceBatchListResponse:
     return get_repository().list_workspace_batches(workspace_id, viewer)
+
+
+def search_workspace(
+    workspace_id: str,
+    request: SearchRequest,
+    viewer: ViewerContext,
+) -> WorkspaceSearchResponse:
+    return get_repository().search_workspace(workspace_id, request, viewer)
 
 
 def get_job(job_id: str, viewer: ViewerContext) -> JobSummary:
