@@ -16,7 +16,7 @@ def get_meta() -> APIMetaResponse:
         name=settings.app_name,
         version="0.1.0",
         environment=settings.environment,
-        auth_strategy="Clerk + Google OAuth (development header fallback enabled)",
+        auth_strategy="Clerk bearer tokens with optional development header fallback",
         storage_strategy="Postgres + object storage + workers",
         active_storage_backend=repository_info.backend,
         storage_detail=repository_info.detail,

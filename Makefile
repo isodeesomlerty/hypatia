@@ -23,7 +23,7 @@ v2-db-init:
 	DATABASE_URL=$(V2_DATABASE_URL) $(PYTHON) services/api/scripts/init_db.py --seed-demo
 
 v2-api:
-	PYTHONPATH=services/api DATABASE_URL=$(V2_DATABASE_URL) HYPATIA_STORAGE_BACKEND=postgres HYPATIA_ALLOW_DEMO_FALLBACK=0 $(PYTHON) -m uvicorn app.main:app --app-dir services/api --reload
+	PYTHONPATH=services/api DATABASE_URL=$(V2_DATABASE_URL) HYPATIA_STORAGE_BACKEND=postgres HYPATIA_ALLOW_DEMO_FALLBACK=0 HYPATIA_ALLOW_DEV_AUTH=0 $(PYTHON) -m uvicorn app.main:app --app-dir services/api --reload
 
 v2-web:
-	HYPATIA_API_BASE_URL=http://127.0.0.1:8000 $(NPM) run web:dev
+	HYPATIA_API_BASE_URL=http://127.0.0.1:8000 HYPATIA_ENABLE_DEMO_FALLBACK=0 $(NPM) run web:dev

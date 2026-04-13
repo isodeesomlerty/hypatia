@@ -1,3 +1,5 @@
+import { AuthControls } from "../components/authControls";
+
 const pillars = [
   {
     title: "Corpus ingestion",
@@ -45,6 +47,7 @@ export default function HomePage() {
           >
             View the current Streamlit app
           </a>
+          <AuthControls />
         </div>
       </section>
 

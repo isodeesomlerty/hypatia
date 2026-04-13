@@ -81,6 +81,13 @@ For auth, the branch now has a viewer-aware contract end to end:
 This is still a development-mode bridge, but it gives us the same request shape
 we will need when Clerk tokens replace the header fallback.
 
+Clerk is now the intended real auth path for V2:
+
+- the Next.js app can run behind `@clerk/nextjs`
+- workspace pages can be protected through Clerk middleware
+- the API can verify Clerk bearer tokens through the configured JWKS endpoint
+- development header auth remains optional and should be disabled for strict local stack testing
+
 ## Storage backends
 
 The API now chooses its storage backend through configuration:
@@ -128,6 +135,23 @@ Supporting files:
 - `compose.v2.yml` starts the local Postgres container
 - `services/api/scripts/init_db.py` applies `schema.sql`
 - `services/api/.env.example` and `apps/web/.env.example` show the expected local environment variables
+
+For strict local stack testing, use:
+
+- `HYPATIA_ALLOW_DEMO_FALLBACK=0`
+- `HYPATIA_ALLOW_DEV_AUTH=0`
+- `HYPATIA_ENABLE_DEMO_FALLBACK=0`
+
+When Clerk is enabled in the web app, configure:
+
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
+- `CLERK_SECRET_KEY`
+- `CLERK_JWT_TEMPLATE`
+
+And on the API side configure:
+
+- `CLERK_ISSUER`
+- `CLERK_JWKS_URL` if you do not want it derived from the issuer automatically
 
 For local development, the seeded demo data is intentional: it lets the V2 web
 shell render against Postgres immediately while the true upload and worker paths

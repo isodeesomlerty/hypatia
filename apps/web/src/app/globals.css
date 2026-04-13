@@ -91,7 +91,8 @@ a {
 .workspace-actions,
 .stack-list,
 .layer-row,
-.viewer-summary {
+.viewer-summary,
+.auth-controls {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
@@ -166,6 +167,7 @@ a {
 
 .workspace-actions {
   margin-top: 8px;
+  align-items: center;
 }
 
 .viewer-summary {
@@ -201,6 +203,39 @@ a {
 
 .viewer-meta--stack {
   flex-basis: 100%;
+}
+
+.auth-controls {
+  align-items: center;
+}
+
+.auth-controls--compact {
+  justify-content: flex-end;
+}
+
+.auth-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 8px 14px;
+  border: 1px solid rgba(58, 42, 28, 0.12);
+  background: rgba(255, 251, 245, 0.88);
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.auth-chip--active {
+  background: rgba(100, 135, 125, 0.12);
+  color: var(--sage);
+}
+
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
 }
 
 .stats-row {

@@ -19,6 +19,10 @@ function getApiBaseUrl() {
   );
 }
 
+function demoFallbackEnabled() {
+  return process.env.HYPATIA_ENABLE_DEMO_FALLBACK === "1";
+}
+
 async function fetchJSON<T>(
   path: string,
   authHeaders: ViewerRequestHeaders,
@@ -64,6 +68,11 @@ export async function getWorkspaceBundle(
 
     return { meta, viewer, summary, graph, papers, jobs, batches };
   } catch {
+    if (!demoFallbackEnabled()) {
+      throw new Error(
+        "Hypatia V2 could not reach the API, and demo fallback is disabled.",
+      );
+    }
     return {
       ...buildDemoWorkspaceBundle(workspaceId),
       meta: buildDemoMeta(),

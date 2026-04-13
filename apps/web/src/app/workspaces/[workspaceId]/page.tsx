@@ -1,3 +1,4 @@
+import { AuthControls } from "../../../components/authControls";
 import { ResearchGraph } from "../../../components/researchGraph";
 import { getWorkspaceBundle } from "../../../lib/api";
 import { uploadModes, visibleLayers } from "../../../lib/demoWorkspace";
@@ -70,6 +71,7 @@ export default async function WorkspacePage({ params }: WorkspacePageProps) {
           </div>
         </div>
         <div className="workspace-actions">
+          <AuthControls compact />
           <button type="button">Upload PDF batch</button>
           <button type="button" className="secondary-button">
             Import ZIP archive

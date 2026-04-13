@@ -14,6 +14,7 @@ class APISettings:
     database_url: str = os.getenv("DATABASE_URL", "")
     storage_backend: str = os.getenv("HYPATIA_STORAGE_BACKEND", "auto")
     allow_demo_fallback: bool = os.getenv("HYPATIA_ALLOW_DEMO_FALLBACK", "1") != "0"
+    allow_dev_auth: bool = os.getenv("HYPATIA_ALLOW_DEV_AUTH", "1") != "0"
 
 
 settings = APISettings()
