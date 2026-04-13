@@ -61,6 +61,47 @@ export type WorkspacePaperListResponse = {
   papers: PaperSummary[];
 };
 
+export type MethodologyCheck = {
+  check: string;
+  status: string;
+  detail: string;
+};
+
+export type HealthScoreSummary = {
+  overall_score: string;
+  checks: MethodologyCheck[];
+};
+
+export type ClaimDetail = {
+  claim_id: string;
+  text: string;
+  claim_type: string;
+  evidence_type: string;
+  evidence_strength: string;
+  evidence_reasoning: string;
+  key_variables: string[];
+  context: string;
+};
+
+export type PaperDetail = {
+  paper_id: string;
+  title: string;
+  authors: string[];
+  year: number | null;
+  status: string;
+  source_filename: string | null;
+  ingestion_mode: string | null;
+  page_count: number | null;
+  file_size_mb: number | null;
+  health_score: HealthScoreSummary;
+  claims: ClaimDetail[];
+};
+
+export type PaperDetailResponse = {
+  workspace_id: string;
+  paper: PaperDetail;
+};
+
 export type JobSummary = {
   job_id: string;
   workspace_id: string;
@@ -110,6 +151,54 @@ export type UploadBatchSummary = {
 export type WorkspaceBatchListResponse = {
   workspace_id: string;
   batches: UploadBatchSummary[];
+};
+
+export type RelationshipAggregate = {
+  supports: number;
+  contradicts: number;
+  extends: number;
+  qualifies: number;
+  total: number;
+  dominant: string | null;
+};
+
+export type ClaimRelationshipDetail = {
+  claim_relationship_id: string;
+  source_claim_id: string;
+  source_claim_text: string;
+  target_claim_id: string;
+  target_claim_text: string;
+  relationship: string;
+  relationship_strength: string;
+  explanation: string;
+  methodological_note: string;
+};
+
+export type RelationshipAttempt = {
+  job_id: string;
+  status: string;
+  progress_label: string;
+  retryable: boolean;
+  created_at: string;
+  error_kind: string | null;
+};
+
+export type PaperRelationshipDetail = {
+  relationship_id: string;
+  workspace_id: string;
+  relationship_type: string;
+  status: RelationshipStatus;
+  visible_strength: number;
+  source_paper: PaperSummary;
+  target_paper: PaperSummary;
+  aggregate: RelationshipAggregate;
+  claim_relationships: ClaimRelationshipDetail[];
+  last_attempt: RelationshipAttempt | null;
+};
+
+export type PaperRelationshipDetailResponse = {
+  workspace_id: string;
+  relationship: PaperRelationshipDetail;
 };
 
 export type APIMetaResponse = {

@@ -1,7 +1,14 @@
-import { buildDemoMeta, buildDemoWorkspaceBundle } from "./demoWorkspace";
+import {
+  buildDemoMeta,
+  buildDemoPaperDetail,
+  buildDemoRelationshipDetail,
+  buildDemoWorkspaceBundle,
+} from "./demoWorkspace";
 import { getApiBaseUrl } from "./apiBaseUrl";
 import type {
   APIMetaResponse,
+  PaperDetailResponse,
+  PaperRelationshipDetailResponse,
   ViewerSummary,
   WorkspaceBatchListResponse,
   WorkspaceBundle,
@@ -71,5 +78,53 @@ export async function getWorkspaceBundle(
       meta: buildDemoMeta(),
       viewer: buildDemoViewer(),
     };
+  }
+}
+
+export async function getPaperDetail(
+  workspaceId: string,
+  paperId: string,
+  authHeaders: ViewerRequestHeaders,
+): Promise<PaperDetailResponse> {
+  try {
+    return await fetchJSON<PaperDetailResponse>(
+      `/v1/workspaces/${workspaceId}/papers/${paperId}`,
+      authHeaders,
+    );
+  } catch {
+    if (!demoFallbackEnabled()) {
+      throw new Error(
+        "Hypatia V2 could not reach the paper detail API, and demo fallback is disabled.",
+      );
+    }
+    const detail = buildDemoPaperDetail(workspaceId, paperId);
+    if (!detail) {
+      throw new Error(`No demo paper detail exists for ${paperId}.`);
+    }
+    return detail;
+  }
+}
+
+export async function getPaperRelationshipDetail(
+  workspaceId: string,
+  relationshipId: string,
+  authHeaders: ViewerRequestHeaders,
+): Promise<PaperRelationshipDetailResponse> {
+  try {
+    return await fetchJSON<PaperRelationshipDetailResponse>(
+      `/v1/workspaces/${workspaceId}/paper-relationships/${relationshipId}`,
+      authHeaders,
+    );
+  } catch {
+    if (!demoFallbackEnabled()) {
+      throw new Error(
+        "Hypatia V2 could not reach the relationship detail API, and demo fallback is disabled.",
+      );
+    }
+    const detail = buildDemoRelationshipDetail(workspaceId, relationshipId);
+    if (!detail) {
+      throw new Error(`No demo relationship detail exists for ${relationshipId}.`);
+    }
+    return detail;
   }
 }

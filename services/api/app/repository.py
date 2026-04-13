@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -12,14 +14,24 @@ from app.auth import ViewerContext
 from app.config import settings
 from app.models import (
     BatchStatus,
+    ClaimDetail,
+    ClaimRelationshipDetail,
     GraphEdge,
     GraphNode,
     GraphPayload,
+    HealthScoreSummary,
     JobStatus,
     JobSummary,
+    MethodologyCheck,
+    PaperDetail,
+    PaperDetailResponse,
+    PaperRelationshipDetail,
+    PaperRelationshipDetailResponse,
     PaperStatus,
     PaperSummary,
     RelationshipStatus,
+    RelationshipAggregate,
+    RelationshipAttempt,
     UploadBatchCreateRequest,
     UploadBatchCreateResponse,
     UploadBatchProgress,
@@ -50,6 +62,80 @@ class RepositoryInfo:
     detail: str
 
 
+PAIRWISE_FAILURE_RE = re.compile(r"Pairwise comparison failed \((?P<kind>[^)]+)\):", re.IGNORECASE)
+
+
+def _coerce_str_list(value) -> list[str]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str)]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _coerce_json_object(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _coerce_claim_detail(item: dict) -> ClaimDetail:
+    return ClaimDetail(
+        claim_id=str(item.get("claim_id") or ""),
+        text=str(item.get("claim") or item.get("text") or "").strip(),
+        claim_type=str(item.get("claim_type") or "descriptive"),
+        evidence_type=str(item.get("evidence_type") or "other"),
+        evidence_strength=str(item.get("evidence_strength") or "moderate"),
+        evidence_reasoning=str(item.get("evidence_reasoning") or "").strip(),
+        key_variables=[
+            variable.strip()
+            for variable in item.get("key_variables", [])
+            if isinstance(variable, str) and variable.strip()
+        ],
+        context=str(item.get("context") or "").strip(),
+    )
+
+
+def _coerce_health_score(payload: dict) -> HealthScoreSummary:
+    checks = payload.get("checks", [])
+    return HealthScoreSummary(
+        overall_score=str(payload.get("overall_score") or "caution"),
+        checks=[
+            MethodologyCheck(
+                check=str(check.get("check") or "").strip(),
+                status=str(check.get("status") or "warn").strip(),
+                detail=str(check.get("detail") or "").strip(),
+            )
+            for check in checks
+            if isinstance(check, dict)
+        ],
+    )
+
+
+def _paper_summary_from_row(row) -> PaperSummary:
+    return PaperSummary(
+        paper_id=row["id"],
+        title=row["title"],
+        authors=_coerce_str_list(row.get("authors")),
+        year=row.get("publication_year"),
+        status=row.get("status", PaperStatus.READY),
+        source_filename=row.get("source_filename"),
+    )
+
+
+def _extract_error_kind(progress_label: str) -> str | None:
+    match = PAIRWISE_FAILURE_RE.search(progress_label or "")
+    if match:
+        return match.group("kind").strip().lower()
+    return None
+
+
 class WorkspaceRepository(Protocol):
     def info(self) -> RepositoryInfo: ...
 
@@ -66,6 +152,14 @@ class WorkspaceRepository(Protocol):
     def get_workspace_papers(
         self, workspace_id: str, viewer: ViewerContext
     ) -> WorkspacePaperListResponse: ...
+
+    def get_paper_detail(
+        self, workspace_id: str, paper_id: str, viewer: ViewerContext
+    ) -> PaperDetailResponse: ...
+
+    def get_paper_relationship_detail(
+        self, workspace_id: str, relationship_id: str, viewer: ViewerContext
+    ) -> PaperRelationshipDetailResponse: ...
 
     def list_workspace_jobs(
         self, workspace_id: str, viewer: ViewerContext
@@ -274,6 +368,179 @@ class InMemoryWorkspaceRepository:
                 ],
             ),
         }
+        self._paper_details: dict[str, dict[str, PaperDetail]] = {
+            "demo": {
+                "paper-1": PaperDetail(
+                    paper_id="paper-1",
+                    title="Biased AI writing assistants shift users' attitudes on societal issues",
+                    authors=["Kobe Xie", "Robert Mahari"],
+                    year=2026,
+                    status=PaperStatus.READY,
+                    source_filename="biased-writing-assistants.pdf",
+                    ingestion_mode="claude_pdf",
+                    page_count=18,
+                    file_size_mb=4.1,
+                    health_score=HealthScoreSummary(
+                        overall_score="caution",
+                        checks=[
+                            MethodologyCheck(
+                                check="sample_size",
+                                status="warn",
+                                detail="The study is suggestive, but the sample leaves limited room for subgroup analysis.",
+                            ),
+                            MethodologyCheck(
+                                check="effect_size_reporting",
+                                status="pass",
+                                detail="The paper reports directional shifts with interpretable quantitative support.",
+                            ),
+                        ],
+                    ),
+                    claims=[
+                        ClaimDetail(
+                            claim_id="paper-1-claim-1",
+                            text="Biased writing assistants can shift user attitudes on politically charged topics without users recognizing the full extent of the influence.",
+                            claim_type="causal",
+                            evidence_type="observational",
+                            evidence_strength="moderate",
+                            evidence_reasoning="The paper reports measurable attitude shifts but with important external-validity caveats.",
+                            key_variables=["assistant stance", "user attitude shift"],
+                            context="Interactive writing-assistant setting on societal issues.",
+                        ),
+                        ClaimDetail(
+                            claim_id="paper-1-claim-2",
+                            text="Participants often rate the assistant positively even when its framing distorts their expressed reasoning.",
+                            claim_type="descriptive",
+                            evidence_type="survey",
+                            evidence_strength="moderate",
+                            evidence_reasoning="User preference and trust are measured directly, though self-report limits remain.",
+                            key_variables=["trust", "assistant favorability"],
+                            context="Post-task evaluation after assisted writing.",
+                        ),
+                    ],
+                ),
+                "paper-2": PaperDetail(
+                    paper_id="paper-2",
+                    title="Sycophantic AI decreases prosocial intentions and promotes dependence",
+                    authors=["Myra Cheng", "Dan Jurafsky"],
+                    year=2026,
+                    status=PaperStatus.PAIRWISE_PENDING,
+                    source_filename="sycophantic-ai.pdf",
+                    ingestion_mode="claude_pdf",
+                    page_count=22,
+                    file_size_mb=5.6,
+                    health_score=HealthScoreSummary(
+                        overall_score="healthy",
+                        checks=[
+                            MethodologyCheck(
+                                check="robustness_checks",
+                                status="pass",
+                                detail="The paper reports follow-up analyses across multiple task framings.",
+                            ),
+                        ],
+                    ),
+                    claims=[
+                        ClaimDetail(
+                            claim_id="paper-2-claim-1",
+                            text="Sycophantic AI can lower prosocial intentions while increasing user trust and reliance.",
+                            claim_type="causal",
+                            evidence_type="observational",
+                            evidence_strength="strong",
+                            evidence_reasoning="The effect appears consistently across several task conditions in the paper.",
+                            key_variables=["sycophancy", "prosocial intention", "dependence"],
+                            context="Social reasoning tasks with supportive assistant responses.",
+                        )
+                    ],
+                ),
+                "paper-3": PaperDetail(
+                    paper_id="paper-3",
+                    title="Using Large Language Models in Behavioral Science",
+                    authors=["Lena Park", "Jonah Everett"],
+                    year=2025,
+                    status=PaperStatus.READY,
+                    source_filename="llms-behavioral-science.pdf",
+                    ingestion_mode="local_text",
+                    page_count=14,
+                    file_size_mb=6.2,
+                    health_score=HealthScoreSummary(overall_score="healthy"),
+                    claims=[
+                        ClaimDetail(
+                            claim_id="paper-3-claim-1",
+                            text="Large language models can accelerate behavioral-science workflows, but they introduce new validity and measurement risks.",
+                            claim_type="theoretical",
+                            evidence_type="systematic_review",
+                            evidence_strength="moderate",
+                            evidence_reasoning="The paper synthesizes multiple examples rather than presenting one decisive experiment.",
+                            key_variables=["workflow acceleration", "validity risk"],
+                            context="Behavioral-science research pipeline overview.",
+                        )
+                    ],
+                ),
+            }
+        }
+        self._relationship_details: dict[str, dict[str, PaperRelationshipDetail]] = {
+            "demo": {
+                "edge-1": PaperRelationshipDetail(
+                    relationship_id="edge-1",
+                    workspace_id="demo",
+                    relationship_type="supports",
+                    status=RelationshipStatus.READY,
+                    visible_strength=9,
+                    source_paper=self._papers["demo"][0],
+                    target_paper=self._papers["demo"][1],
+                    aggregate=RelationshipAggregate(
+                        supports=2,
+                        contradicts=0,
+                        extends=0,
+                        qualifies=1,
+                        total=3,
+                        dominant="supports",
+                    ),
+                    claim_relationships=[
+                        ClaimRelationshipDetail(
+                            claim_relationship_id="claim-rel-1",
+                            source_claim_id="paper-1-claim-1",
+                            source_claim_text="Biased writing assistants can shift user attitudes on politically charged topics without users recognizing the full extent of the influence.",
+                            target_claim_id="paper-2-claim-1",
+                            target_claim_text="Sycophantic AI can lower prosocial intentions while increasing user trust and reliance.",
+                            relationship="supports",
+                            relationship_strength="partial",
+                            explanation="Both papers find that users can be influenced by assistant behavior while underestimating that influence.",
+                            methodological_note="The tasks differ, but both papers rely on interactive assistant settings rather than offline annotation.",
+                        ),
+                        ClaimRelationshipDetail(
+                            claim_relationship_id="claim-rel-2",
+                            source_claim_id="paper-1-claim-2",
+                            source_claim_text="Participants often rate the assistant positively even when its framing distorts their expressed reasoning.",
+                            target_claim_id="paper-2-claim-1",
+                            target_claim_text="Sycophantic AI can lower prosocial intentions while increasing user trust and reliance.",
+                            relationship="qualifies",
+                            relationship_strength="direct",
+                            explanation="The second paper adds a clearer downstream behavioral consequence to the trust pattern the first paper observes.",
+                            methodological_note="The dependence outcome is more behaviorally concrete in the second paper than in the first.",
+                        ),
+                    ],
+                ),
+                "edge-2": PaperRelationshipDetail(
+                    relationship_id="edge-2",
+                    workspace_id="demo",
+                    relationship_type="pending",
+                    status=RelationshipStatus.PENDING,
+                    visible_strength=2,
+                    source_paper=self._papers["demo"][1],
+                    target_paper=self._papers["demo"][2],
+                    aggregate=RelationshipAggregate(),
+                    claim_relationships=[],
+                    last_attempt=RelationshipAttempt(
+                        job_id="job-demo-pairwise",
+                        status=JobStatus.QUEUED,
+                        progress_label="Retryable failures stay pending and visible instead of disappearing from the graph.",
+                        retryable=True,
+                        created_at=datetime(2026, 4, 12, 13, 42, tzinfo=UTC),
+                        error_kind=None,
+                    ),
+                ),
+            }
+        }
 
     def info(self) -> RepositoryInfo:
         return RepositoryInfo(
@@ -362,6 +629,29 @@ class InMemoryWorkspaceRepository:
         return WorkspacePaperListResponse(
             workspace_id=workspace_id,
             papers=self._papers[workspace_id],
+        )
+
+    def get_paper_detail(
+        self, workspace_id: str, paper_id: str, viewer: ViewerContext
+    ) -> PaperDetailResponse:
+        self._ensure_workspace(workspace_id, viewer)
+        self._assert_workspace_access(workspace_id, viewer)
+        paper = self._paper_details.get(workspace_id, {}).get(paper_id)
+        if paper is None:
+            raise HTTPException(status_code=404, detail="Paper not found")
+        return PaperDetailResponse(workspace_id=workspace_id, paper=paper)
+
+    def get_paper_relationship_detail(
+        self, workspace_id: str, relationship_id: str, viewer: ViewerContext
+    ) -> PaperRelationshipDetailResponse:
+        self._ensure_workspace(workspace_id, viewer)
+        self._assert_workspace_access(workspace_id, viewer)
+        relationship = self._relationship_details.get(workspace_id, {}).get(relationship_id)
+        if relationship is None:
+            raise HTTPException(status_code=404, detail="Paper relationship not found")
+        return PaperRelationshipDetailResponse(
+            workspace_id=workspace_id,
+            relationship=relationship,
         )
 
     def list_workspace_jobs(
@@ -598,6 +888,153 @@ class PostgresWorkspaceRepository:
             items=self._batch_items(connection, row["id"]),
         )
 
+    def _claim_rows_for_paper(self, connection, workspace_id: str, paper_id: str):
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, text, claim_type
+                FROM claims
+                WHERE workspace_id = %s AND paper_id = %s
+                ORDER BY id ASC
+                """,
+                (workspace_id, paper_id),
+            )
+            return cursor.fetchall()
+
+    def _paper_detail_from_row(self, connection, row) -> PaperDetail:
+        payload = _coerce_json_object(row.get("analysis_payload"))
+        claim_payload = payload.get("claims", [])
+        if isinstance(claim_payload, list) and claim_payload:
+            claims = [
+                _coerce_claim_detail(item)
+                for item in claim_payload
+                if isinstance(item, dict) and (item.get("claim_id") or item.get("claim"))
+            ]
+        else:
+            claims = [
+                ClaimDetail(
+                    claim_id=claim_row["id"],
+                    text=claim_row["text"],
+                    claim_type=claim_row.get("claim_type") or "descriptive",
+                )
+                for claim_row in self._claim_rows_for_paper(connection, row["workspace_id"], row["id"])
+            ]
+
+        return PaperDetail(
+            paper_id=row["id"],
+            title=row["title"],
+            authors=_coerce_str_list(row.get("authors")),
+            year=row.get("publication_year"),
+            status=row.get("status", PaperStatus.READY),
+            source_filename=row.get("source_filename"),
+            ingestion_mode=payload.get("ingestion_mode"),
+            page_count=payload.get("page_count"),
+            file_size_mb=payload.get("file_size_mb"),
+            health_score=_coerce_health_score(_coerce_json_object(payload.get("health_score"))),
+            claims=claims,
+        )
+
+    def _claim_relationships_for_pair(
+        self,
+        connection,
+        workspace_id: str,
+        source_paper_id: str,
+        target_paper_id: str,
+    ) -> list[ClaimRelationshipDetail]:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                  cr.id,
+                  cr.source_claim_id,
+                  sc.text AS source_claim_text,
+                  cr.target_claim_id,
+                  tc.text AS target_claim_text,
+                  cr.relationship_type,
+                  cr.strength,
+                  cr.explanation,
+                  cr.methodological_note
+                FROM claim_relationships cr
+                JOIN claims sc ON sc.id = cr.source_claim_id
+                JOIN claims tc ON tc.id = cr.target_claim_id
+                WHERE cr.workspace_id = %s
+                  AND sc.paper_id = %s
+                  AND tc.paper_id = %s
+                ORDER BY cr.id ASC
+                """,
+                (workspace_id, source_paper_id, target_paper_id),
+            )
+            rows = cursor.fetchall()
+        return [
+            ClaimRelationshipDetail(
+                claim_relationship_id=row["id"],
+                source_claim_id=row["source_claim_id"],
+                source_claim_text=row["source_claim_text"] or "",
+                target_claim_id=row["target_claim_id"],
+                target_claim_text=row["target_claim_text"] or "",
+                relationship=row["relationship_type"],
+                relationship_strength=row["strength"] or "",
+                explanation=row["explanation"] or "",
+                methodological_note=row["methodological_note"] or "",
+            )
+            for row in rows
+        ]
+
+    def _aggregate_claim_relationships(
+        self, claim_relationships: list[ClaimRelationshipDetail]
+    ) -> RelationshipAggregate:
+        counts = {
+            "supports": 0,
+            "contradicts": 0,
+            "extends": 0,
+            "qualifies": 0,
+        }
+        for relationship in claim_relationships:
+            key = relationship.relationship
+            if key in counts:
+                counts[key] += 1
+        total = sum(counts.values())
+        dominant = max(counts, key=counts.get) if total else None
+        return RelationshipAggregate(
+            supports=counts["supports"],
+            contradicts=counts["contradicts"],
+            extends=counts["extends"],
+            qualifies=counts["qualifies"],
+            total=total,
+            dominant=dominant,
+        )
+
+    def _latest_pairwise_attempt(
+        self,
+        connection,
+        workspace_id: str,
+        relationship_id: str,
+    ) -> RelationshipAttempt | None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, status, progress_label, retryable, created_at
+                FROM jobs
+                WHERE workspace_id = %s
+                  AND job_type = 'pairwise_comparison'
+                  AND payload ->> 'relationship_id' = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (workspace_id, relationship_id),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        return RelationshipAttempt(
+            job_id=row["id"],
+            status=row["status"],
+            progress_label=row["progress_label"],
+            retryable=row["retryable"],
+            created_at=row["created_at"],
+            error_kind=_extract_error_kind(row["progress_label"]),
+        )
+
     def get_viewer_summary(self, viewer: ViewerContext) -> ViewerSummary:
         with self._connect() as connection:
             self._ensure_viewer_seed(connection, viewer)
@@ -752,6 +1189,116 @@ class PostgresWorkspaceRepository:
                 )
                 for row in rows
             ],
+        )
+
+    def get_paper_detail(
+        self, workspace_id: str, paper_id: str, viewer: ViewerContext
+    ) -> PaperDetailResponse:
+        with self._connect() as connection:
+            self._ensure_viewer_seed(connection, viewer)
+            self._assert_workspace_access(connection, workspace_id, viewer)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                      id,
+                      workspace_id,
+                      title,
+                      authors,
+                      publication_year,
+                      status,
+                      source_filename,
+                      analysis_payload
+                    FROM papers
+                    WHERE workspace_id = %s AND id = %s
+                    """,
+                    (workspace_id, paper_id),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise HTTPException(status_code=404, detail="Paper not found")
+            paper = self._paper_detail_from_row(connection, row)
+        return PaperDetailResponse(workspace_id=workspace_id, paper=paper)
+
+    def get_paper_relationship_detail(
+        self, workspace_id: str, relationship_id: str, viewer: ViewerContext
+    ) -> PaperRelationshipDetailResponse:
+        with self._connect() as connection:
+            self._ensure_viewer_seed(connection, viewer)
+            self._assert_workspace_access(connection, workspace_id, viewer)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                      pr.id,
+                      pr.workspace_id,
+                      pr.relationship_type,
+                      pr.status,
+                      pr.visible_strength,
+                      source_paper.id AS source_paper_id,
+                      source_paper.title AS source_title,
+                      source_paper.authors AS source_authors,
+                      source_paper.publication_year AS source_year,
+                      source_paper.status AS source_status,
+                      source_paper.source_filename AS source_filename,
+                      target_paper.id AS target_paper_id,
+                      target_paper.title AS target_title,
+                      target_paper.authors AS target_authors,
+                      target_paper.publication_year AS target_year,
+                      target_paper.status AS target_status,
+                      target_paper.source_filename AS target_filename
+                    FROM paper_relationships pr
+                    JOIN papers source_paper ON source_paper.id = pr.source_paper_id
+                    JOIN papers target_paper ON target_paper.id = pr.target_paper_id
+                    WHERE pr.workspace_id = %s AND pr.id = %s
+                    """,
+                    (workspace_id, relationship_id),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Paper relationship not found",
+                    )
+
+            claim_relationships = self._claim_relationships_for_pair(
+                connection,
+                workspace_id,
+                row["source_paper_id"],
+                row["target_paper_id"],
+            )
+            aggregate = self._aggregate_claim_relationships(claim_relationships)
+            last_attempt = self._latest_pairwise_attempt(connection, workspace_id, relationship_id)
+
+        relationship = PaperRelationshipDetail(
+            relationship_id=row["id"],
+            workspace_id=workspace_id,
+            relationship_type=row["relationship_type"],
+            status=row["status"],
+            visible_strength=row["visible_strength"],
+            source_paper=PaperSummary(
+                paper_id=row["source_paper_id"],
+                title=row["source_title"],
+                authors=_coerce_str_list(row.get("source_authors")),
+                year=row.get("source_year"),
+                status=row.get("source_status", PaperStatus.READY),
+                source_filename=row.get("source_filename"),
+            ),
+            target_paper=PaperSummary(
+                paper_id=row["target_paper_id"],
+                title=row["target_title"],
+                authors=_coerce_str_list(row.get("target_authors")),
+                year=row.get("target_year"),
+                status=row.get("target_status", PaperStatus.READY),
+                source_filename=row.get("target_filename"),
+            ),
+            aggregate=aggregate,
+            claim_relationships=claim_relationships,
+            last_attempt=last_attempt,
+        )
+        return PaperRelationshipDetailResponse(
+            workspace_id=workspace_id,
+            relationship=relationship,
         )
 
     def list_workspace_jobs(

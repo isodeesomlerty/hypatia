@@ -1,7 +1,10 @@
 import type { GraphPayload } from "../lib/types";
 
 type ResearchGraphProps = {
+  workspaceId: string;
   graph: GraphPayload;
+  selectedPaperId?: string | null;
+  selectedRelationshipId?: string | null;
 };
 
 type PositionedNode = {
@@ -41,7 +44,20 @@ function labelForNode(label: string) {
   return label.length > 30 ? `${label.slice(0, 30)}…` : label;
 }
 
-export function ResearchGraph({ graph }: ResearchGraphProps) {
+function paperHref(workspaceId: string, paperId: string) {
+  return `/workspaces/${workspaceId}?paper=${encodeURIComponent(paperId)}`;
+}
+
+function relationshipHref(workspaceId: string, relationshipId: string) {
+  return `/workspaces/${workspaceId}?relationship=${encodeURIComponent(relationshipId)}`;
+}
+
+export function ResearchGraph({
+  workspaceId,
+  graph,
+  selectedPaperId,
+  selectedRelationshipId,
+}: ResearchGraphProps) {
   const nodes = buildPositions(graph);
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
 
@@ -65,30 +81,52 @@ export function ResearchGraph({ graph }: ResearchGraphProps) {
             edge.status === "pending"
               ? "pending"
               : RELATIONSHIP_CLASS[edge.relationship_type] || "supports";
+          const isSelected = edge.id === selectedRelationshipId;
 
           return (
-            <line
-              key={edge.id}
-              className={`graph-edge-line graph-edge-line--${relationshipClass}`}
-              x1={source.x}
-              y1={source.y}
-              x2={target.x}
-              y2={target.y}
-              strokeWidth={Math.max(4, edge.visible_strength)}
-            />
+            <a key={edge.id} href={relationshipHref(workspaceId, edge.id)}>
+              <g className="graph-edge-group">
+                <line
+                  className="graph-edge-hitarea"
+                  x1={source.x}
+                  y1={source.y}
+                  x2={target.x}
+                  y2={target.y}
+                />
+                <line
+                  className={`graph-edge-line graph-edge-line--${relationshipClass} ${
+                    isSelected ? "graph-edge-line--selected" : ""
+                  }`}
+                  x1={source.x}
+                  y1={source.y}
+                  x2={target.x}
+                  y2={target.y}
+                  strokeWidth={Math.max(4, edge.visible_strength)}
+                />
+              </g>
+            </a>
           );
         })}
 
         {nodes.map((node) => (
-          <g key={node.id} className="graph-node-group">
-            <circle className="graph-node-circle" cx={node.x} cy={node.y} r="32" />
-            <text className="graph-node-text" x={node.x} y={node.y + 5} textAnchor="middle">
-              {node.id.split("-").at(-1)}
-            </text>
-            <text className="graph-node-label" x={node.x} y={node.y + 58} textAnchor="middle">
-              {labelForNode(node.label)}
-            </text>
-          </g>
+          <a key={node.id} href={paperHref(workspaceId, node.id)}>
+            <g className="graph-node-group">
+              <circle
+                className={`graph-node-circle ${
+                  node.id === selectedPaperId ? "graph-node-circle--selected" : ""
+                }`}
+                cx={node.x}
+                cy={node.y}
+                r="32"
+              />
+              <text className="graph-node-text" x={node.x} y={node.y + 5} textAnchor="middle">
+                {node.id.split("-").at(-1)}
+              </text>
+              <text className="graph-node-label" x={node.x} y={node.y + 58} textAnchor="middle">
+                {labelForNode(node.label)}
+              </text>
+            </g>
+          </a>
         ))}
       </svg>
     </div>

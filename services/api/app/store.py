@@ -3,6 +3,8 @@ from __future__ import annotations
 from app.auth import ViewerContext
 from app.models import (
     JobSummary,
+    PaperDetailResponse,
+    PaperRelationshipDetailResponse,
     UploadBatchCreateRequest,
     UploadBatchCreateResponse,
     UploadBatchSummary,
@@ -38,6 +40,22 @@ def get_workspace_papers(
     workspace_id: str, viewer: ViewerContext
 ) -> WorkspacePaperListResponse:
     return get_repository().get_workspace_papers(workspace_id, viewer)
+
+
+def get_paper_detail(
+    workspace_id: str, paper_id: str, viewer: ViewerContext
+) -> PaperDetailResponse:
+    return get_repository().get_paper_detail(workspace_id, paper_id, viewer)
+
+
+def get_paper_relationship_detail(
+    workspace_id: str, relationship_id: str, viewer: ViewerContext
+) -> PaperRelationshipDetailResponse:
+    return get_repository().get_paper_relationship_detail(
+        workspace_id,
+        relationship_id,
+        viewer,
+    )
 
 
 def list_workspace_jobs(

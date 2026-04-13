@@ -1,12 +1,21 @@
 import { AuthControls } from "../../../components/authControls";
+import { KnowledgePanel } from "../../../components/knowledgePanel";
 import { ResearchGraph } from "../../../components/researchGraph";
 import { UploadBatchPanel } from "../../../components/uploadBatchPanel";
-import { getWorkspaceBundle } from "../../../lib/api";
+import {
+  getPaperDetail,
+  getPaperRelationshipDetail,
+  getWorkspaceBundle,
+} from "../../../lib/api";
 import { uploadModes, visibleLayers } from "../../../lib/demoWorkspace";
 import { getViewerRequestHeaders } from "../../../lib/viewer";
 
 type WorkspacePageProps = {
   params: Promise<{ workspaceId: string }>;
+  searchParams: Promise<{
+    paper?: string | string[];
+    relationship?: string | string[];
+  }>;
 };
 
 function formatStatus(status: string) {
@@ -19,11 +28,39 @@ function formatBackendLabel(backend: string) {
   return backend.replaceAll("_", " ").replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
-export default async function WorkspacePage({ params }: WorkspacePageProps) {
+function firstSearchValue(value: string | string[] | undefined) {
+  if (Array.isArray(value)) {
+    return value[0] ?? null;
+  }
+  return value ?? null;
+}
+
+export default async function WorkspacePage({
+  params,
+  searchParams,
+}: WorkspacePageProps) {
   const { workspaceId } = await params;
+  const resolvedSearchParams = await searchParams;
   const authHeaders = await getViewerRequestHeaders();
   const workspace = await getWorkspaceBundle(workspaceId, authHeaders);
+  const selectedPaperId = firstSearchValue(resolvedSearchParams.paper);
+  const selectedRelationshipId = firstSearchValue(resolvedSearchParams.relationship);
   const activeBatch = workspace.batches.batches[0] ?? null;
+  const [selectedPaperResult, selectedRelationshipResult] = await Promise.allSettled([
+    selectedPaperId
+      ? getPaperDetail(workspaceId, selectedPaperId, authHeaders)
+      : Promise.resolve(null),
+    selectedRelationshipId
+      ? getPaperRelationshipDetail(workspaceId, selectedRelationshipId, authHeaders)
+      : Promise.resolve(null),
+  ]);
+
+  const selectedPaper =
+    selectedPaperResult.status === "fulfilled" ? selectedPaperResult.value : null;
+  const selectedRelationship =
+    selectedRelationshipResult.status === "fulfilled"
+      ? selectedRelationshipResult.value
+      : null;
 
   const stats = [
     { label: "Papers in corpus", value: String(workspace.summary.paper_count) },
@@ -177,65 +214,28 @@ export default async function WorkspacePage({ params }: WorkspacePageProps) {
               </span>
             ))}
           </div>
-          <ResearchGraph graph={workspace.graph.graph} />
+          <ResearchGraph
+            workspaceId={workspaceId}
+            graph={workspace.graph.graph}
+            selectedPaperId={selectedPaper?.paper.paper_id ?? null}
+            selectedRelationshipId={
+              selectedRelationship?.relationship.relationship_id ?? null
+            }
+          />
           <p className="panel-note">
             In V2, this graph will update from durable workspace state rather
             than Streamlit session memory, so batch processing progress and
             pending relationships survive reloads and retries.
           </p>
         </article>
-
-        <article className="workspace-panel detail-panel">
-          <div className="section-label">Corpus details</div>
-          <div className="detail-card">
-            <div className="detail-heading">Accessible workspaces</div>
-            <ul className="workspace-access-list">
-              {workspace.viewer.workspaces.map((entry) => (
-                <li className="workspace-access-row" key={entry.workspace_id}>
-                  <div>
-                    <strong>{entry.name}</strong>
-                    <span>{entry.workspace_id}</span>
-                  </div>
-                  <span className="status-pill status-pill--queue">
-                    {formatStatus(entry.role)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="detail-card">
-            <div className="detail-heading">Workspace papers</div>
-            <ul className="paper-list">
-              {workspace.papers.papers.map((paper) => (
-                <li className="paper-row" key={paper.paper_id}>
-                  <div>
-                    <strong>{paper.title}</strong>
-                    <span>{paper.year}</span>
-                  </div>
-                  <span className="status-pill status-pill--paper">
-                    {formatStatus(paper.status)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="detail-card">
-            <div className="detail-heading">Recent jobs</div>
-            <ul className="job-list">
-              {workspace.jobs.jobs.map((job) => (
-                <li className="job-row" key={job.job_id}>
-                  <div>
-                    <strong>{formatStatus(job.job_type)}</strong>
-                    <span>{job.progress_label}</span>
-                  </div>
-                  <span className="status-pill status-pill--queue">
-                    {formatStatus(job.status)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </article>
+        <KnowledgePanel
+          workspaceId={workspaceId}
+          papers={workspace.papers.papers}
+          graph={workspace.graph.graph}
+          jobs={workspace.jobs.jobs}
+          selectedPaper={selectedPaper}
+          selectedRelationship={selectedRelationship}
+        />
       </section>
     </main>
   );

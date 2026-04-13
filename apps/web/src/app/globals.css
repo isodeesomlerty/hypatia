@@ -396,9 +396,20 @@ a {
   display: block;
 }
 
+.graph-edge-group,
+.graph-node-group {
+  cursor: pointer;
+}
+
 .graph-edge-line {
   stroke-linecap: round;
   opacity: 0.88;
+  transition: opacity 160ms ease, stroke-width 160ms ease;
+}
+
+.graph-edge-hitarea {
+  stroke: transparent;
+  stroke-width: 20;
 }
 
 .graph-edge-line--supports {
@@ -422,11 +433,29 @@ a {
   stroke-dasharray: 14 12;
 }
 
+.graph-edge-line--selected {
+  opacity: 1;
+  filter: drop-shadow(0 0 12px rgba(58, 42, 28, 0.18));
+}
+
+.graph-edge-group:hover .graph-edge-line {
+  opacity: 1;
+}
+
 .graph-node-circle {
   fill: rgba(255, 252, 247, 0.98);
   stroke: rgba(58, 42, 28, 0.16);
   stroke-width: 2;
   filter: drop-shadow(0 16px 24px rgba(40, 27, 17, 0.12));
+  transition: transform 160ms ease, stroke 160ms ease, fill 160ms ease;
+}
+
+.graph-node-group:hover .graph-node-circle,
+.graph-node-circle--selected {
+  fill: rgba(255, 250, 242, 1);
+  stroke: rgba(177, 105, 59, 0.42);
+  transform-origin: center;
+  transform: scale(1.03);
 }
 
 .graph-node-text {
@@ -447,10 +476,43 @@ a {
   gap: 16px;
 }
 
+.detail-card--hero {
+  background:
+    radial-gradient(circle at top left, rgba(100, 135, 125, 0.08), transparent 35%),
+    rgba(255, 253, 249, 0.98);
+}
+
+.detail-kicker {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .detail-heading {
   font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   font-size: 1.35rem;
   margin-bottom: 8px;
+}
+
+.detail-heading--compact {
+  margin-bottom: 0;
+}
+
+.detail-bridge {
+  margin: 10px 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
 }
 
 .batch-card {
@@ -525,6 +587,23 @@ a {
   padding: 14px 16px;
 }
 
+.paper-list--interactive .paper-row {
+  padding: 0;
+}
+
+.paper-link {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 16px;
+}
+
+.paper-link:hover {
+  background: rgba(255, 248, 240, 0.96);
+}
+
 .file-result div,
 .paper-row div,
 .workspace-access-row div,
@@ -567,8 +646,131 @@ a {
   color: var(--stone);
 }
 
+.status-pill--ghost {
+  background: rgba(255, 251, 245, 0.88);
+  color: var(--muted);
+}
+
+.status-pill--relationship.status-pill--supports,
+.status-pill--health.status-pill--healthy {
+  background: rgba(100, 135, 125, 0.14);
+  color: var(--sage);
+}
+
+.status-pill--relationship.status-pill--contradicts,
+.status-pill--health.status-pill--concern {
+  background: rgba(149, 100, 88, 0.14);
+  color: var(--terracotta);
+}
+
+.status-pill--relationship.status-pill--extends {
+  background: rgba(124, 119, 99, 0.14);
+  color: var(--stone);
+}
+
+.status-pill--relationship.status-pill--qualifies,
+.status-pill--health.status-pill--caution {
+  background: rgba(167, 132, 76, 0.14);
+  color: var(--sand);
+}
+
+.status-pill--relationship.status-pill--pending {
+  background: rgba(124, 119, 99, 0.12);
+  color: var(--stone);
+}
+
 .panel-note {
   margin: 16px 4px 0;
+}
+
+.comparison-grid,
+.relationship-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.comparison-card,
+.relationship-stat,
+.claim-card,
+.claim-link-card,
+.method-check,
+.method-note {
+  border: 1px solid rgba(58, 42, 28, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 251, 245, 0.88);
+  padding: 16px;
+}
+
+.comparison-card {
+  display: grid;
+  gap: 8px;
+}
+
+.relationship-stat span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-bottom: 6px;
+}
+
+.relationship-stat strong {
+  font-size: 1.6rem;
+  font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+}
+
+.relationship-stat--supports {
+  background: rgba(100, 135, 125, 0.09);
+}
+
+.relationship-stat--contradicts {
+  background: rgba(149, 100, 88, 0.09);
+}
+
+.relationship-stat--extends {
+  background: rgba(124, 119, 99, 0.09);
+}
+
+.relationship-stat--qualifies {
+  background: rgba(167, 132, 76, 0.09);
+}
+
+.claim-list,
+.claim-link-list,
+.method-check-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.claim-card,
+.claim-link-card {
+  display: grid;
+  gap: 12px;
+}
+
+.claim-link-explainer,
+.comparison-card span,
+.method-check p,
+.method-note span,
+.empty-note,
+.meta-line,
+.claim-card p {
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.claim-link-pair {
+  display: grid;
+  gap: 12px;
+}
+
+.claim-link-pair strong,
+.method-note strong {
+  display: block;
+  margin-bottom: 6px;
 }
 
 @media (max-width: 1040px) {
@@ -576,7 +778,9 @@ a {
   .workspace-grid,
   .stats-row,
   .ingestion-grid,
-  .option-grid {
+  .option-grid,
+  .comparison-grid,
+  .relationship-stat-grid {
     grid-template-columns: 1fr;
   }
 

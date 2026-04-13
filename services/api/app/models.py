@@ -99,6 +99,47 @@ class PaperSummary(BaseModel):
     source_filename: str | None = None
 
 
+class MethodologyCheck(BaseModel):
+    check: str
+    status: str
+    detail: str
+
+
+class HealthScoreSummary(BaseModel):
+    overall_score: str = "caution"
+    checks: list[MethodologyCheck] = Field(default_factory=list)
+
+
+class ClaimDetail(BaseModel):
+    claim_id: str
+    text: str
+    claim_type: str = "descriptive"
+    evidence_type: str = "other"
+    evidence_strength: str = "moderate"
+    evidence_reasoning: str = ""
+    key_variables: list[str] = Field(default_factory=list)
+    context: str = ""
+
+
+class PaperDetail(BaseModel):
+    paper_id: str
+    title: str
+    authors: list[str] = Field(default_factory=list)
+    year: int | None = None
+    status: PaperStatus = PaperStatus.READY
+    source_filename: str | None = None
+    ingestion_mode: str | None = None
+    page_count: int | None = None
+    file_size_mb: float | None = None
+    health_score: HealthScoreSummary = Field(default_factory=HealthScoreSummary)
+    claims: list[ClaimDetail] = Field(default_factory=list)
+
+
+class PaperDetailResponse(BaseModel):
+    workspace_id: str
+    paper: PaperDetail
+
+
 class WorkspacePaperListResponse(BaseModel):
     workspace_id: str
     papers: list[PaperSummary] = Field(default_factory=list)
@@ -163,6 +204,54 @@ class UploadBatchSummary(BaseModel):
 class WorkspaceBatchListResponse(BaseModel):
     workspace_id: str
     batches: list[UploadBatchSummary] = Field(default_factory=list)
+
+
+class RelationshipAggregate(BaseModel):
+    supports: int = 0
+    contradicts: int = 0
+    extends: int = 0
+    qualifies: int = 0
+    total: int = 0
+    dominant: str | None = None
+
+
+class ClaimRelationshipDetail(BaseModel):
+    claim_relationship_id: str
+    source_claim_id: str
+    source_claim_text: str = ""
+    target_claim_id: str
+    target_claim_text: str = ""
+    relationship: str
+    relationship_strength: str = ""
+    explanation: str = ""
+    methodological_note: str = ""
+
+
+class RelationshipAttempt(BaseModel):
+    job_id: str
+    status: JobStatus
+    progress_label: str
+    retryable: bool = True
+    created_at: datetime
+    error_kind: str | None = None
+
+
+class PaperRelationshipDetail(BaseModel):
+    relationship_id: str
+    workspace_id: str
+    relationship_type: str
+    status: RelationshipStatus = RelationshipStatus.READY
+    visible_strength: int = 1
+    source_paper: PaperSummary
+    target_paper: PaperSummary
+    aggregate: RelationshipAggregate = Field(default_factory=RelationshipAggregate)
+    claim_relationships: list[ClaimRelationshipDetail] = Field(default_factory=list)
+    last_attempt: RelationshipAttempt | None = None
+
+
+class PaperRelationshipDetailResponse(BaseModel):
+    workspace_id: str
+    relationship: PaperRelationshipDetail
 
 
 class UploadBatchCreateRequest(BaseModel):

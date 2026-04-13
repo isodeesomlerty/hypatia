@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends
 
 from app.auth import ViewerContext, get_viewer_context
 from app.models import (
+    PaperDetailResponse,
+    PaperRelationshipDetailResponse,
     WorkspaceBatchListResponse,
     WorkspaceGraphResponse,
     WorkspaceJobListResponse,
@@ -11,6 +13,8 @@ from app.models import (
     WorkspaceSummary,
 )
 from app.store import (
+    get_paper_detail,
+    get_paper_relationship_detail,
     list_workspace_batches,
     get_workspace_graph,
     get_workspace_papers,
@@ -40,6 +44,27 @@ def get_workspace_paper_list(
     workspace_id: str, viewer: ViewerContext = Depends(get_viewer_context)
 ) -> WorkspacePaperListResponse:
     return get_workspace_papers(workspace_id, viewer)
+
+
+@router.get("/{workspace_id}/papers/{paper_id}", response_model=PaperDetailResponse)
+def get_workspace_paper_detail(
+    workspace_id: str,
+    paper_id: str,
+    viewer: ViewerContext = Depends(get_viewer_context),
+) -> PaperDetailResponse:
+    return get_paper_detail(workspace_id, paper_id, viewer)
+
+
+@router.get(
+    "/{workspace_id}/paper-relationships/{relationship_id}",
+    response_model=PaperRelationshipDetailResponse,
+)
+def get_workspace_relationship_detail(
+    workspace_id: str,
+    relationship_id: str,
+    viewer: ViewerContext = Depends(get_viewer_context),
+) -> PaperRelationshipDetailResponse:
+    return get_paper_relationship_detail(workspace_id, relationship_id, viewer)
 
 
 @router.get("/{workspace_id}/jobs", response_model=WorkspaceJobListResponse)
