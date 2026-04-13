@@ -25,7 +25,10 @@ CREATE TABLE IF NOT EXISTS papers (
   authors JSONB NOT NULL DEFAULT '[]'::jsonb,
   publication_year INTEGER,
   status TEXT NOT NULL,
-  source_filename TEXT
+  source_filename TEXT,
+  source_sha256 TEXT,
+  storage_backend TEXT,
+  storage_key TEXT
 );
 
 CREATE TABLE IF NOT EXISTS paper_relationships (
@@ -99,6 +102,9 @@ CREATE TABLE IF NOT EXISTS claim_relationships (
 );
 
 CREATE INDEX IF NOT EXISTS idx_papers_workspace_id ON papers(workspace_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_workspace_sha256
+  ON papers(workspace_id, source_sha256)
+  WHERE source_sha256 IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_jobs_workspace_id ON jobs(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_upload_batches_workspace_id ON upload_batches(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_paper_relationships_workspace_id ON paper_relationships(workspace_id);

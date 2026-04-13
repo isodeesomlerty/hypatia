@@ -4,6 +4,15 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _resolve_repo_path(value: str) -> str:
+    path = Path(value)
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return str(path.resolve())
+
 
 @dataclass(frozen=True)
 class APISettings:
@@ -17,8 +26,8 @@ class APISettings:
     allow_demo_fallback: bool = os.getenv("HYPATIA_ALLOW_DEMO_FALLBACK", "1") != "0"
     allow_dev_auth: bool = os.getenv("HYPATIA_ALLOW_DEV_AUTH", "1") != "0"
     upload_storage_backend: str = os.getenv("HYPATIA_UPLOAD_STORAGE_BACKEND", "local")
-    upload_storage_root: str = str(
-        Path(os.getenv("HYPATIA_UPLOAD_STORAGE_ROOT", "data/v2-uploads")).resolve()
+    upload_storage_root: str = _resolve_repo_path(
+        os.getenv("HYPATIA_UPLOAD_STORAGE_ROOT", "data/v2-uploads")
     )
 
 

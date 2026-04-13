@@ -2,7 +2,7 @@ PYTHON ?= .venv/bin/python3
 NPM ?= npm
 V2_DATABASE_URL ?= postgresql://hypatia:hypatia@127.0.0.1:5432/hypatia
 
-.PHONY: preprocess refresh run v2-db-up v2-db-down v2-db-init v2-api v2-web
+.PHONY: preprocess refresh run v2-db-up v2-db-down v2-db-init v2-api v2-web v2-worker
 
 preprocess:
 	$(PYTHON) scripts/preprocess_corpus.py
@@ -27,3 +27,6 @@ v2-api:
 
 v2-web:
 	HYPATIA_API_BASE_URL=http://127.0.0.1:8000 HYPATIA_ENABLE_DEMO_FALLBACK=0 $(NPM) run web:dev
+
+v2-worker:
+	DATABASE_URL=$(V2_DATABASE_URL) HYPATIA_UPLOAD_STORAGE_ROOT=data/v2-uploads $(PYTHON) services/worker/worker/main.py --poll

@@ -54,6 +54,49 @@ def apply_schema(connection) -> None:
     with connection.cursor() as cursor:
         for statement in statements:
             cursor.execute(statement)
+        cursor.execute(
+            """
+            ALTER TABLE papers
+            ADD COLUMN IF NOT EXISTS source_sha256 TEXT
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE papers
+            ADD COLUMN IF NOT EXISTS storage_backend TEXT
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE papers
+            ADD COLUMN IF NOT EXISTS storage_key TEXT
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE upload_batch_items
+            ADD COLUMN IF NOT EXISTS storage_backend TEXT
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE upload_batch_items
+            ADD COLUMN IF NOT EXISTS storage_key TEXT
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE upload_batch_items
+            ADD COLUMN IF NOT EXISTS sha256 TEXT
+            """
+        )
+        cursor.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_workspace_sha256
+            ON papers(workspace_id, source_sha256)
+            WHERE source_sha256 IS NOT NULL
+            """
+        )
 
 
 def seed_demo_data(connection) -> None:

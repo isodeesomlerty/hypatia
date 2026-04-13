@@ -3,7 +3,9 @@ name = "hypatia-worker"
 version = "0.1.0"
 description = "Worker service for Hypatia ingestion and graph jobs."
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+  "psycopg[binary]>=3.2,<4",
+]
 
 [build-system]
 requires = ["setuptools>=68"]

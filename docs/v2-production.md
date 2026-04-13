@@ -128,15 +128,24 @@ The quickest way to run the first durable V2 stack locally is:
    - `make v2-db-init`
 4. Start the API in Postgres mode:
    - `make v2-api`
-5. Start the web app:
+5. Start the worker:
+   - `make v2-worker`
+6. Start the web app:
    - `make v2-web`
 
 Supporting files:
 
 - `compose.v2.yml` starts the local Postgres container
 - `services/api/scripts/init_db.py` applies `schema.sql`
-- `services/api/.env.example` and `apps/web/.env.example` show the expected local environment variables
+- `services/api/.env.example`, `services/worker/.env.example`, and `apps/web/.env.example` show the expected local environment variables
 - accepted uploaded files are stored under `data/v2-uploads/` by the local upload storage backend
+
+The worker now processes queued `batch_ingestion` jobs by:
+
+- reading accepted files from local upload storage
+- creating new `papers` rows automatically
+- skipping duplicate PDFs within the same workspace using file hashes
+- creating pending paper-relationship edges for newly ingested papers until real pairwise comparison is implemented
 
 For strict local stack testing, use:
 
