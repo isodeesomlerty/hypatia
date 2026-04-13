@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -21,6 +23,13 @@ SUPPORTED_JOB_TYPES = [
     "replication_run",
 ]
 
+PAIRWISE_RESOLUTION_TYPES = (
+    "supports",
+    "qualifies",
+    "extends",
+    "contradicts",
+)
+
 
 def _title_from_filename(filename: str) -> str:
     stem = Path(filename).stem
@@ -35,16 +44,17 @@ def _connect():
     return psycopg.connect(settings.database_url, row_factory=dict_row)
 
 
-def _claim_batch_job(connection):
+def _claim_job(connection, *, job_type: str, progress_label: str):
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            SELECT id, workspace_id, batch_id, total_steps
+            SELECT id, workspace_id, batch_id, total_steps, payload
             FROM jobs
-            WHERE job_type = 'batch_ingestion' AND status = 'queued'
+            WHERE job_type = %s AND status = 'queued'
             ORDER BY created_at ASC
             LIMIT 1
-            """
+            """,
+            (job_type,),
         )
         job = cursor.fetchone()
         if job is None:
@@ -53,16 +63,32 @@ def _claim_batch_job(connection):
             """
             UPDATE jobs
             SET status = 'in_progress',
-                progress_label = 'Worker claimed batch ingestion job.',
+                progress_label = %s,
                 completed_steps = 0
             WHERE id = %s AND status = 'queued'
             """,
-            (job["id"],),
+            (progress_label, job["id"]),
         )
         if cursor.rowcount != 1:
             return None
     connection.commit()
     return job
+
+
+def _claim_batch_job(connection):
+    return _claim_job(
+        connection,
+        job_type="batch_ingestion",
+        progress_label="Worker claimed batch ingestion job.",
+    )
+
+
+def _claim_pairwise_job(connection):
+    return _claim_job(
+        connection,
+        job_type="pairwise_comparison",
+        progress_label="Worker claimed pairwise comparison job.",
+    )
 
 
 def _accepted_batch_items(connection, batch_id: str):
@@ -156,13 +182,13 @@ def _create_pending_relationships(
     connection,
     workspace_id: str,
     new_paper_ids: list[str],
-) -> int:
+) -> list[dict[str, str]]:
     if not new_paper_ids:
-        return 0
+        return []
 
     existing_pairs = _existing_relationship_pairs(connection, workspace_id)
     workspace_paper_ids = _workspace_paper_ids(connection, workspace_id)
-    inserted = 0
+    created: list[dict[str, str]] = []
 
     with connection.cursor() as cursor:
         for source_id in new_paper_ids:
@@ -179,6 +205,7 @@ def _create_pending_relationships(
                       relationship_type, status, visible_strength
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
                     """,
                     (
                         f"edge-{uuid4().hex[:10]}",
@@ -190,9 +217,16 @@ def _create_pending_relationships(
                         1,
                     ),
                 )
+                relationship = cursor.fetchone()
                 existing_pairs.add(pair)
-                inserted += 1
-        if inserted:
+                created.append(
+                    {
+                        "relationship_id": relationship["id"],
+                        "source_paper_id": pair[0],
+                        "target_paper_id": pair[1],
+                    }
+                )
+        if created:
             cursor.execute(
                 """
                 UPDATE papers
@@ -201,7 +235,56 @@ def _create_pending_relationships(
                 """,
                 (workspace_id, new_paper_ids),
             )
-    return inserted
+    return created
+
+
+def _queue_pairwise_jobs(
+    connection,
+    workspace_id: str,
+    batch_id: str,
+    relationships: list[dict[str, str]],
+) -> int:
+    if not relationships:
+        return 0
+
+    created_at = datetime.now(UTC)
+    with connection.cursor() as cursor:
+        for relationship in relationships:
+            relationship_id = relationship["relationship_id"]
+            source_paper_id = relationship["source_paper_id"]
+            target_paper_id = relationship["target_paper_id"]
+            cursor.execute(
+                """
+                INSERT INTO jobs (
+                  id, workspace_id, batch_id, job_type, payload, status, progress_label,
+                  completed_steps, total_steps, retryable, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    f"job-{uuid4().hex[:8]}",
+                    workspace_id,
+                    batch_id,
+                    "pairwise_comparison",
+                    json.dumps(
+                        {
+                            "relationship_id": relationship_id,
+                            "source_paper_id": source_paper_id,
+                            "target_paper_id": target_paper_id,
+                        }
+                    ),
+                    "queued",
+                    (
+                        "Queued pairwise comparison for "
+                        f"{source_paper_id} and {target_paper_id}."
+                    ),
+                    0,
+                    1,
+                    True,
+                    created_at,
+                ),
+            )
+    return len(relationships)
 
 
 def _update_batch_item_message(connection, item_id: int, message: str) -> None:
@@ -216,7 +299,15 @@ def _update_batch_item_message(connection, item_id: int, message: str) -> None:
         )
 
 
-def _complete_job(connection, job_id: str, *, status: str, progress_label: str, completed_steps: int, total_steps: int) -> None:
+def _complete_job(
+    connection,
+    job_id: str,
+    *,
+    status: str,
+    progress_label: str,
+    completed_steps: int,
+    total_steps: int,
+) -> None:
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -231,24 +322,165 @@ def _complete_job(connection, job_id: str, *, status: str, progress_label: str, 
         )
 
 
-def _update_batch_summary(
+def _job_payload(job) -> dict[str, str]:
+    payload = job.get("payload") or {}
+    if isinstance(payload, str):
+        return json.loads(payload)
+    return payload
+
+
+def _count_batch_item_failures(connection, batch_id: str) -> int:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM upload_batch_items
+            WHERE batch_id = %s
+              AND message LIKE %s
+            """,
+            (batch_id, "Stored file missing%"),
+        )
+        row = cursor.fetchone()
+    return int(row["count"]) if row is not None else 0
+
+
+def _refresh_batch_progress(
     connection,
     batch_id: str,
     *,
-    status: str,
-    papers_analyzed: int,
-    pairwise_pending: int,
+    papers_analyzed: int | None = None,
 ) -> None:
     with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT papers_analyzed
+            FROM upload_batches
+            WHERE id = %s
+            """,
+            (batch_id,),
+        )
+        batch = cursor.fetchone()
+        if batch is None:
+            return
+
+        if papers_analyzed is None:
+            papers_analyzed = batch["papers_analyzed"]
+
+        cursor.execute(
+            """
+            SELECT
+              COUNT(*) FILTER (
+                WHERE job_type = 'pairwise_comparison' AND status = 'completed'
+              ) AS pairwise_completed,
+              COUNT(*) FILTER (
+                WHERE job_type = 'pairwise_comparison' AND status IN ('queued', 'in_progress')
+              ) AS pairwise_pending,
+              COUNT(*) FILTER (
+                WHERE job_type = 'pairwise_comparison' AND status = 'failed'
+              ) AS pairwise_failed,
+              COUNT(*) FILTER (
+                WHERE job_type = 'batch_ingestion' AND status IN ('queued', 'in_progress')
+              ) AS ingestion_active
+            FROM jobs
+            WHERE batch_id = %s
+            """,
+            (batch_id,),
+        )
+        stats = cursor.fetchone()
+
+        pending = int(stats["pairwise_pending"])
+        completed = int(stats["pairwise_completed"])
+        failed = int(stats["pairwise_failed"])
+        active_ingestion = int(stats["ingestion_active"])
+        missing_files = _count_batch_item_failures(connection, batch_id)
+
+        if active_ingestion or pending:
+            status = "in_progress"
+        elif failed or missing_files:
+            status = "partial_failure"
+        else:
+            status = "completed"
+
         cursor.execute(
             """
             UPDATE upload_batches
             SET status = %s,
                 papers_analyzed = %s,
+                pairwise_completed = %s,
                 pairwise_pending = %s
             WHERE id = %s
             """,
-            (status, papers_analyzed, pairwise_pending, batch_id),
+            (status, papers_analyzed, completed, pending, batch_id),
+        )
+
+
+def _load_pairwise_relationship(connection, workspace_id: str, relationship_id: str):
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+              pr.id,
+              pr.source_paper_id,
+              pr.target_paper_id,
+              pr.status,
+              source_paper.title AS source_title,
+              target_paper.title AS target_title
+            FROM paper_relationships pr
+            JOIN papers source_paper ON source_paper.id = pr.source_paper_id
+            JOIN papers target_paper ON target_paper.id = pr.target_paper_id
+            WHERE pr.workspace_id = %s AND pr.id = %s
+            """,
+            (workspace_id, relationship_id),
+        )
+        return cursor.fetchone()
+
+
+def _resolve_pairwise_relationship(source_paper_id: str, target_paper_id: str) -> tuple[str, int]:
+    digest = hashlib.sha256(
+        f"{source_paper_id}:{target_paper_id}".encode("utf-8")
+    ).digest()
+    bucket = digest[0] % 10
+    if bucket < 5:
+        relationship_type = PAIRWISE_RESOLUTION_TYPES[0]
+    elif bucket < 7:
+        relationship_type = PAIRWISE_RESOLUTION_TYPES[1]
+    elif bucket < 9:
+        relationship_type = PAIRWISE_RESOLUTION_TYPES[2]
+    else:
+        relationship_type = PAIRWISE_RESOLUTION_TYPES[3]
+    visible_strength = 2 + (digest[1] % 5)
+    return relationship_type, visible_strength
+
+
+def _refresh_paper_statuses(
+    connection,
+    workspace_id: str,
+    paper_ids: list[str],
+) -> None:
+    if not paper_ids:
+        return
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE papers AS paper
+            SET status = CASE
+              WHEN EXISTS (
+                SELECT 1
+                FROM paper_relationships relationship
+                WHERE relationship.workspace_id = paper.workspace_id
+                  AND (
+                    relationship.source_paper_id = paper.id
+                    OR relationship.target_paper_id = paper.id
+                  )
+                  AND relationship.status = 'pending'
+              )
+              THEN 'pairwise_pending'
+              ELSE 'ready'
+            END
+            WHERE paper.workspace_id = %s
+              AND paper.id = ANY(%s)
+            """,
+            (workspace_id, paper_ids),
         )
 
 
@@ -260,7 +492,7 @@ def process_next_batch_job() -> bool:
 
         workspace_id = job["workspace_id"]
         batch_id = job["batch_id"]
-        total_steps = job["total_steps"]
+        total_steps = max(job["total_steps"], 1)
         if batch_id is None:
             _complete_job(
                 connection,
@@ -311,25 +543,28 @@ def process_next_batch_job() -> bool:
                 f"Ingested into workspace as {paper_id}.",
             )
 
-        pairwise_pending = _create_pending_relationships(connection, workspace_id, new_paper_ids)
-        batch_status = "partial_failure" if missing_files else "completed"
+        created_relationships = _create_pending_relationships(
+            connection,
+            workspace_id,
+            new_paper_ids,
+        )
+        queued_pairwise_jobs = _queue_pairwise_jobs(
+            connection,
+            workspace_id,
+            batch_id,
+            created_relationships,
+        )
+
         summary_bits = [f"{ingested} paper(s) ingested"]
         if duplicates:
             summary_bits.append(f"{duplicates} duplicate(s) skipped")
         if missing_files:
             summary_bits.append(f"{missing_files} stored file(s) missing")
-        if pairwise_pending:
+        if queued_pairwise_jobs:
             summary_bits.append(
-                f"{pairwise_pending} pairwise comparison(s) remain pending"
+                f"{queued_pairwise_jobs} pairwise comparison job(s) queued"
             )
 
-        _update_batch_summary(
-            connection,
-            batch_id,
-            status=batch_status,
-            papers_analyzed=ingested,
-            pairwise_pending=pairwise_pending,
-        )
         _complete_job(
             connection,
             job["id"],
@@ -338,19 +573,114 @@ def process_next_batch_job() -> bool:
             completed_steps=total_steps,
             total_steps=total_steps,
         )
+        _refresh_batch_progress(
+            connection,
+            batch_id,
+            papers_analyzed=ingested,
+        )
         connection.commit()
         return True
 
 
+def process_next_pairwise_job() -> bool:
+    with _connect() as connection:
+        job = _claim_pairwise_job(connection)
+        if job is None:
+            return False
+
+        total_steps = max(job["total_steps"], 1)
+        batch_id = job["batch_id"]
+        payload = _job_payload(job)
+        relationship_id = payload.get("relationship_id")
+        source_paper_id = payload.get("source_paper_id")
+        target_paper_id = payload.get("target_paper_id")
+
+        if not relationship_id or not source_paper_id or not target_paper_id:
+            _complete_job(
+                connection,
+                job["id"],
+                status="failed",
+                progress_label="Pairwise comparison job payload was incomplete.",
+                completed_steps=0,
+                total_steps=total_steps,
+            )
+            if batch_id:
+                _refresh_batch_progress(connection, batch_id)
+            connection.commit()
+            return True
+
+        relationship = _load_pairwise_relationship(
+            connection,
+            job["workspace_id"],
+            relationship_id,
+        )
+        if relationship is None:
+            _complete_job(
+                connection,
+                job["id"],
+                status="failed",
+                progress_label="Referenced paper relationship could not be found.",
+                completed_steps=0,
+                total_steps=total_steps,
+            )
+            if batch_id:
+                _refresh_batch_progress(connection, batch_id)
+            connection.commit()
+            return True
+
+        relationship_type, visible_strength = _resolve_pairwise_relationship(
+            source_paper_id,
+            target_paper_id,
+        )
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE paper_relationships
+                SET relationship_type = %s,
+                    status = 'ready',
+                    visible_strength = %s
+                WHERE id = %s
+                """,
+                (relationship_type, visible_strength, relationship_id),
+            )
+
+        _refresh_paper_statuses(
+            connection,
+            job["workspace_id"],
+            [source_paper_id, target_paper_id],
+        )
+        _complete_job(
+            connection,
+            job["id"],
+            status="completed",
+            progress_label=(
+                "Resolved pairwise comparison for "
+                f"{relationship['source_title']} and {relationship['target_title']} "
+                f"as {relationship_type}."
+            ),
+            completed_steps=total_steps,
+            total_steps=total_steps,
+        )
+        if batch_id:
+            _refresh_batch_progress(connection, batch_id)
+        connection.commit()
+        return True
+
+
+def process_next_queued_job() -> bool:
+    return process_next_batch_job() or process_next_pairwise_job()
+
+
 def run_loop(poll_interval_seconds: float) -> None:
     while True:
-        worked = process_next_batch_job()
+        worked = process_next_queued_job()
         if not worked:
             time.sleep(poll_interval_seconds)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Hypatia worker service placeholder.")
+    parser = argparse.ArgumentParser(description="Hypatia background worker service.")
     parser.add_argument(
         "--describe",
         action="store_true",
@@ -359,12 +689,12 @@ def main() -> None:
     parser.add_argument(
         "--once",
         action="store_true",
-        help="Process at most one queued batch ingestion job and exit.",
+        help="Process at most one queued worker job and exit.",
     )
     parser.add_argument(
         "--poll",
         action="store_true",
-        help="Continuously poll for queued batch ingestion jobs.",
+        help="Continuously poll for queued worker jobs.",
     )
     args = parser.parse_args()
 
@@ -374,7 +704,11 @@ def main() -> None:
                 {
                     "service": "hypatia-worker",
                     "job_types": SUPPORTED_JOB_TYPES,
-                    "notes": "This service executes background ingestion now, with pairwise comparison, graph rebuild, and replication tasks to follow.",
+                    "notes": (
+                        "This service executes batch ingestion and placeholder "
+                        "pairwise comparison jobs now, with graph rebuild and "
+                        "replication tasks still to follow."
+                    ),
                     "database_url": settings.database_url,
                     "upload_storage_root": settings.upload_storage_root,
                 },
@@ -384,17 +718,15 @@ def main() -> None:
         return
 
     if args.once:
-        processed = process_next_batch_job()
-        print("Processed one queued batch job." if processed else "No queued batch jobs found.")
+        processed = process_next_queued_job()
+        print("Processed one queued worker job." if processed else "No queued worker jobs found.")
         return
 
     if args.poll:
         run_loop(settings.poll_interval_seconds)
         return
 
-    print(
-        "Hypatia worker is ready. Run with --describe, --once, or --poll."
-    )
+    print("Hypatia worker is ready. Run with --describe, --once, or --poll.")
 
 
 if __name__ == "__main__":

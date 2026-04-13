@@ -48,7 +48,7 @@ The Python background worker. This will own:
 1. Add auth and workspace identity to the web and API layers.
 2. Introduce Postgres models for workspaces, papers, claims, relationships, and jobs.
 3. Add object-storage-backed upload ingestion for PDFs and ZIPs.
-4. Move pairwise comparison into durable background jobs.
+4. Replace the placeholder pairwise resolver with the real comparison engine.
 5. Recreate the current graph and knowledge-panel flows against API data.
 
 ## Current API scaffold
@@ -145,7 +145,17 @@ The worker now processes queued `batch_ingestion` jobs by:
 - reading accepted files from local upload storage
 - creating new `papers` rows automatically
 - skipping duplicate PDFs within the same workspace using file hashes
-- creating pending paper-relationship edges for newly ingested papers until real pairwise comparison is implemented
+- creating queued `pairwise_comparison` jobs for newly ingested paper pairs
+
+The worker also processes queued `pairwise_comparison` jobs by:
+
+- resolving pending paper-relationship edges into ready graph edges
+- updating batch progress counts as comparisons finish
+- moving papers from `pairwise_pending` to `ready` when all of their current comparisons are resolved
+
+For now, pairwise resolution uses a deterministic placeholder heuristic so the
+durable job flow can be exercised before the true comparison pipeline is wired
+into V2.
 
 For strict local stack testing, use:
 

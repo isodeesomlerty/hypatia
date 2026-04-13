@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   batch_id TEXT,
   job_type TEXT NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
   status TEXT NOT NULL,
   progress_label TEXT NOT NULL,
   completed_steps INTEGER NOT NULL DEFAULT 0,
