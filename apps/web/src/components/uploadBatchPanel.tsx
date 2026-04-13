@@ -79,8 +79,12 @@ export function UploadBatchPanel({ workspaceId }: UploadBatchPanelProps) {
         return;
       }
 
+      const modeSummary =
+        sourceKind === "zip_import"
+          ? "Archive accepted. Hypatia will expand it into per-paper PDF items during ingestion."
+          : `${payload.batch.progress.accepted_items} accepted, ${payload.batch.progress.rejected_items} rejected.`;
       setFeedback(
-        `Created ${payload.batch.batch_id}. ${payload.batch.progress.accepted_items} accepted, ${payload.batch.progress.rejected_items} rejected. ${
+        `Created ${payload.batch.batch_id}. ${modeSummary} ${
           payload.job ? `${formatStatus(payload.job.status)} job ${payload.job.job_id} queued.` : ""
         }`.trim(),
       );

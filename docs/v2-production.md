@@ -170,6 +170,7 @@ The worker now also expects:
 The worker now processes queued `batch_ingestion` jobs by:
 
 - reading accepted files from the configured upload storage backend
+- expanding ZIP imports into per-file batch items before ingestion
 - running the prototype paper-analysis pipeline against uploaded PDFs
 - creating new `papers` rows with analyzed metadata
 - skipping duplicate PDFs within the same workspace using file hashes

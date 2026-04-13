@@ -10,6 +10,7 @@ from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
+from zipfile import BadZipFile, ZipFile
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC_DIR = REPO_ROOT / "src"
@@ -125,6 +126,20 @@ def _accepted_batch_items(connection, batch_id: str):
             (batch_id,),
         )
         return cursor.fetchall()
+
+
+def _load_batch_source_kind(connection, batch_id: str) -> str | None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT source_kind
+            FROM upload_batches
+            WHERE id = %s
+            """,
+            (batch_id,),
+        )
+        row = cursor.fetchone()
+    return row["source_kind"] if row else None
 
 
 def _paper_exists(connection, workspace_id: str, sha256: str | None):
@@ -330,6 +345,58 @@ def _update_batch_item_message(connection, item_id: int, message: str) -> None:
         )
 
 
+def _replace_batch_items(connection, batch_id: str, item_rows: list[dict]) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            DELETE FROM upload_batch_items
+            WHERE batch_id = %s
+            """,
+            (batch_id,),
+        )
+        for row in item_rows:
+            cursor.execute(
+                """
+                INSERT INTO upload_batch_items (
+                  batch_id, filename, media_type, size_bytes,
+                  storage_backend, storage_key, sha256, status, message
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    batch_id,
+                    row["filename"],
+                    row.get("media_type"),
+                    row.get("size_bytes"),
+                    row.get("storage_backend"),
+                    row.get("storage_key"),
+                    row.get("sha256"),
+                    row["status"],
+                    row["message"],
+                ),
+            )
+
+
+def _set_batch_item_counts(
+    connection,
+    batch_id: str,
+    *,
+    total_items: int,
+    accepted_items: int,
+    rejected_items: int,
+) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE upload_batches
+            SET total_items = %s,
+                accepted_items = %s,
+                rejected_items = %s
+            WHERE id = %s
+            """,
+            (total_items, accepted_items, rejected_items, batch_id),
+        )
+
+
 def _complete_job(
     connection,
     job_id: str,
@@ -370,12 +437,14 @@ def _count_batch_item_failures(connection, batch_id: str) -> int:
               AND (
                 message LIKE %s
                 OR message LIKE %s
+                OR message LIKE %s
               )
             """,
             (
                 batch_id,
                 "Stored file missing%",
                 "Paper analysis failed:%",
+                "ZIP import failed:%",
             ),
         )
         row = cursor.fetchone()
@@ -432,8 +501,24 @@ def _refresh_batch_progress(
         active_ingestion = int(stats["ingestion_active"])
         missing_files = _count_batch_item_failures(connection, batch_id)
 
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT accepted_items, rejected_items
+                FROM upload_batches
+                WHERE id = %s
+                """,
+                (batch_id,),
+            )
+            item_counts = cursor.fetchone()
+
+        accepted_items = int(item_counts["accepted_items"]) if item_counts else 0
+        rejected_items = int(item_counts["rejected_items"]) if item_counts else 0
+
         if active_ingestion or pending:
             status = "in_progress"
+        elif accepted_items == 0 and rejected_items > 0:
+            status = "rejected"
         elif failed or missing_files:
             status = "partial_failure"
         else:
@@ -471,6 +556,205 @@ def _load_pairwise_relationship(connection, workspace_id: str, relationship_id: 
             (workspace_id, relationship_id),
         )
         return cursor.fetchone()
+
+
+def _expand_zip_batch_items(
+    connection,
+    *,
+    workspace_id: str,
+    batch_id: str,
+    archive_items: list[dict],
+) -> tuple[list[dict], dict[str, int]]:
+    expanded_rows: list[dict] = []
+    accepted_count = 0
+    rejected_count = 0
+    seen_hashes: set[str] = set()
+    materializer = get_upload_materializer()
+
+    for archive_item in archive_items:
+        filename = archive_item["filename"]
+        before_count = len(expanded_rows)
+        try:
+            with materializer.materialize(
+                storage_backend=archive_item["storage_backend"],
+                storage_key=archive_item["storage_key"],
+            ) as archive_path:
+                if archive_path is None:
+                    raise FileNotFoundError("Archive item had no stored path.")
+                with ZipFile(archive_path) as archive:
+                    for member in archive.infolist():
+                        member_name = member.filename.strip()
+                        if not member_name or member.is_dir():
+                            continue
+                        lowered_name = member_name.lower()
+                        if lowered_name.startswith("__macosx/") or lowered_name.endswith(
+                            "/.ds_store"
+                        ) or lowered_name == ".ds_store":
+                            continue
+                        try:
+                            payload = archive.read(member)
+                        except KeyError:
+                            rejected_count += 1
+                            expanded_rows.append(
+                                {
+                                    "filename": member_name,
+                                    "media_type": None,
+                                    "size_bytes": None,
+                                    "storage_backend": None,
+                                    "storage_key": None,
+                                    "sha256": None,
+                                    "status": "rejected",
+                                    "message": "ZIP import failed: archive member could not be read.",
+                                }
+                            )
+                            continue
+
+                        if not payload:
+                            rejected_count += 1
+                            expanded_rows.append(
+                                {
+                                    "filename": member_name,
+                                    "media_type": "application/pdf"
+                                    if lowered_name.endswith(".pdf")
+                                    else None,
+                                    "size_bytes": 0,
+                                    "storage_backend": None,
+                                    "storage_key": None,
+                                    "sha256": None,
+                                    "status": "rejected",
+                                    "message": "Rejected. Empty files cannot be ingested from ZIP import.",
+                                }
+                            )
+                            continue
+
+                        if not lowered_name.endswith(".pdf"):
+                            rejected_count += 1
+                            expanded_rows.append(
+                                {
+                                    "filename": member_name,
+                                    "media_type": None,
+                                    "size_bytes": len(payload),
+                                    "storage_backend": None,
+                                    "storage_key": None,
+                                    "sha256": None,
+                                    "status": "rejected",
+                                    "message": "Rejected. ZIP import only ingests PDF files.",
+                                }
+                            )
+                            continue
+
+                        digest = hashlib.sha256(payload).hexdigest()
+                        if digest in seen_hashes:
+                            rejected_count += 1
+                            expanded_rows.append(
+                                {
+                                    "filename": member_name,
+                                    "media_type": "application/pdf",
+                                    "size_bytes": len(payload),
+                                    "storage_backend": None,
+                                    "storage_key": None,
+                                    "sha256": digest,
+                                    "status": "rejected",
+                                    "message": "Rejected. Duplicate PDF inside ZIP archive.",
+                                }
+                            )
+                            continue
+
+                        seen_hashes.add(digest)
+                        stored = materializer.store_bytes(
+                            workspace_id=workspace_id,
+                            filename=Path(member_name).name or member_name,
+                            media_type="application/pdf",
+                            content=payload,
+                        )
+                        accepted_count += 1
+                        expanded_rows.append(
+                            {
+                                "filename": member_name,
+                                "media_type": "application/pdf",
+                                "size_bytes": len(payload),
+                                "storage_backend": stored.storage_backend,
+                                "storage_key": stored.storage_key,
+                                "sha256": stored.sha256,
+                                "status": "accepted",
+                                "message": f"Accepted from ZIP import ({filename}).",
+                            }
+                        )
+        except (FileNotFoundError, RuntimeError) as exc:
+            rejected_count += 1
+            expanded_rows.append(
+                {
+                    "filename": filename,
+                    "media_type": archive_item.get("media_type"),
+                    "size_bytes": archive_item.get("size_bytes"),
+                    "storage_backend": None,
+                    "storage_key": None,
+                    "sha256": None,
+                    "status": "rejected",
+                    "message": f"ZIP import failed: {exc}",
+                }
+            )
+        except BadZipFile:
+            rejected_count += 1
+            expanded_rows.append(
+                {
+                    "filename": filename,
+                    "media_type": archive_item.get("media_type"),
+                    "size_bytes": archive_item.get("size_bytes"),
+                    "storage_backend": None,
+                    "storage_key": None,
+                    "sha256": None,
+                    "status": "rejected",
+                    "message": "ZIP import failed: archive could not be opened.",
+                }
+            )
+        if len(expanded_rows) == before_count:
+            rejected_count += 1
+            expanded_rows.append(
+                {
+                    "filename": filename,
+                    "media_type": archive_item.get("media_type"),
+                    "size_bytes": archive_item.get("size_bytes"),
+                    "storage_backend": None,
+                    "storage_key": None,
+                    "sha256": None,
+                    "status": "rejected",
+                    "message": "Rejected. ZIP import did not contain any ingestible PDF files.",
+                }
+            )
+
+    _replace_batch_items(connection, batch_id, expanded_rows)
+    _set_batch_item_counts(
+        connection,
+        batch_id,
+        total_items=len(expanded_rows),
+        accepted_items=accepted_count,
+        rejected_items=rejected_count,
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE jobs
+            SET total_steps = %s,
+                progress_label = %s
+            WHERE batch_id = %s
+              AND job_type = 'batch_ingestion'
+            """,
+            (
+                max(accepted_count + 2, 2),
+                (
+                    f"Expanded ZIP import into {accepted_count} accepted PDF(s) and "
+                    f"{rejected_count} rejected item(s)."
+                ),
+                batch_id,
+            ),
+        )
+
+    return _accepted_batch_items(connection, batch_id), {
+        "accepted": accepted_count,
+        "rejected": rejected_count,
+        "total": len(expanded_rows),
+    }
 
 
 def _resolve_placeholder_pairwise_relationship(
@@ -853,6 +1137,7 @@ def process_next_batch_job() -> bool:
             connection.commit()
             return True
 
+        source_kind = _load_batch_source_kind(connection, batch_id)
         items = _accepted_batch_items(connection, batch_id)
         ingested = 0
         duplicates = 0
@@ -860,6 +1145,15 @@ def process_next_batch_job() -> bool:
         analysis_failures = 0
         new_paper_ids: list[str] = []
         analysis_manifest = load_manifest()
+        zip_expansion_summary: dict[str, int] | None = None
+
+        if source_kind == "zip_import":
+            items, zip_expansion_summary = _expand_zip_batch_items(
+                connection,
+                workspace_id=workspace_id,
+                batch_id=batch_id,
+                archive_items=items,
+            )
 
         for item in items:
             if not item["storage_key"] or not item["storage_backend"]:
@@ -943,6 +1237,15 @@ def process_next_batch_job() -> bool:
         )
 
         summary_bits = [f"{ingested} paper(s) ingested"]
+        if zip_expansion_summary is not None:
+            summary_bits.insert(
+                0,
+                (
+                    "ZIP expanded into "
+                    f"{zip_expansion_summary['accepted']} accepted PDF(s) and "
+                    f"{zip_expansion_summary['rejected']} rejected item(s)"
+                ),
+            )
         if duplicates:
             summary_bits.append(f"{duplicates} duplicate(s) skipped")
         if missing_files:
