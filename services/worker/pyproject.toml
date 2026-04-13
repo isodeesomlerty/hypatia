@@ -5,6 +5,10 @@ description = "Worker service for Hypatia ingestion and graph jobs."
 requires-python = ">=3.12"
 dependencies = [
   "psycopg[binary]>=3.2,<4",
+  "requests>=2.32,<3",
+  "jsonschema>=4.23,<5",
+  "pdfplumber>=0.11,<1",
+  "PyMuPDF>=1.24,<2",
 ]
 
 [build-system]

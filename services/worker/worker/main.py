@@ -4,14 +4,30 @@ import argparse
 import hashlib
 import json
 import re
+import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SRC_DIR = REPO_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 import psycopg
 from psycopg.rows import dict_row
 
+from research_graph.cache import load_manifest
+from research_graph.config import CACHE_DIR as RG_CACHE_DIR
+from research_graph.graph import aggregate_paper_edges
+from research_graph.pipeline import (
+    ClaudeAPIError,
+    ResearchGraphError,
+    _classify_pairwise_failure,
+    analyze_pdf,
+    compare_papers,
+)
 from worker.config import settings
 
 
@@ -29,6 +45,10 @@ PAIRWISE_RESOLUTION_TYPES = (
     "extends",
     "contradicts",
 )
+
+
+class SourceArtifactUnavailableError(ResearchGraphError):
+    """Raised when V2 has no way to reconstruct a real paper record."""
 
 
 def _title_from_filename(filename: str) -> str:
@@ -120,8 +140,16 @@ def _paper_exists(connection, workspace_id: str, sha256: str | None):
         return cursor.fetchone()
 
 
-def _insert_paper(connection, workspace_id: str, item) -> str:
+def _insert_paper(
+    connection,
+    workspace_id: str,
+    item,
+    analyzed_paper: dict | None = None,
+) -> str:
     paper_id = f"paper-{uuid4().hex[:10]}"
+    title = analyzed_paper.get("title") if analyzed_paper else None
+    authors = analyzed_paper.get("authors") if analyzed_paper else []
+    year = analyzed_paper.get("year") if analyzed_paper else None
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -129,13 +157,14 @@ def _insert_paper(connection, workspace_id: str, item) -> str:
               id, workspace_id, title, authors, publication_year, status,
               source_filename, source_sha256, storage_backend, storage_key
             )
-            VALUES (%s, %s, %s, '[]'::jsonb, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
             """,
             (
                 paper_id,
                 workspace_id,
-                _title_from_filename(item["filename"]),
-                None,
+                title or _title_from_filename(item["filename"]),
+                json.dumps(authors or []),
+                year,
                 "ready",
                 item["filename"],
                 item["sha256"],
@@ -336,9 +365,16 @@ def _count_batch_item_failures(connection, batch_id: str) -> int:
             SELECT COUNT(*) AS count
             FROM upload_batch_items
             WHERE batch_id = %s
-              AND message LIKE %s
+              AND (
+                message LIKE %s
+                OR message LIKE %s
+              )
             """,
-            (batch_id, "Stored file missing%"),
+            (
+                batch_id,
+                "Stored file missing%",
+                "Paper analysis failed:%",
+            ),
         )
         row = cursor.fetchone()
     return int(row["count"]) if row is not None else 0
@@ -435,7 +471,10 @@ def _load_pairwise_relationship(connection, workspace_id: str, relationship_id: 
         return cursor.fetchone()
 
 
-def _resolve_pairwise_relationship(source_paper_id: str, target_paper_id: str) -> tuple[str, int]:
+def _resolve_placeholder_pairwise_relationship(
+    source_paper_id: str,
+    target_paper_id: str,
+) -> tuple[str, int]:
     digest = hashlib.sha256(
         f"{source_paper_id}:{target_paper_id}".encode("utf-8")
     ).digest()
@@ -484,6 +523,282 @@ def _refresh_paper_statuses(
         )
 
 
+def _load_paper_row(connection, workspace_id: str, paper_id: str):
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+              id,
+              workspace_id,
+              title,
+              authors,
+              publication_year,
+              status,
+              source_filename,
+              source_sha256,
+              storage_backend,
+              storage_key
+            FROM papers
+            WHERE workspace_id = %s AND id = %s
+            """,
+            (workspace_id, paper_id),
+        )
+        return cursor.fetchone()
+
+
+def _load_claim_rows(connection, workspace_id: str, paper_id: str) -> list[dict]:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id, text, claim_type
+            FROM claims
+            WHERE workspace_id = %s AND paper_id = %s
+            ORDER BY id ASC
+            """,
+            (workspace_id, paper_id),
+        )
+        return cursor.fetchall()
+
+
+def _load_cached_analysis(source_sha256: str | None) -> dict | None:
+    if not source_sha256:
+        return None
+    manifest = load_manifest()
+    entry = manifest.get("papers_by_hash", {}).get(source_sha256)
+    if not entry:
+        return None
+    relative_path = entry.get("paper_cache_path")
+    if not relative_path:
+        return None
+    cache_path = RG_CACHE_DIR / relative_path
+    if not cache_path.exists():
+        return None
+    try:
+        with cache_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _stored_pdf_path(paper_row) -> Path | None:
+    if paper_row.get("storage_backend") != "local":
+        return None
+    storage_key = paper_row.get("storage_key")
+    if not storage_key:
+        return None
+    stored_path = Path(settings.upload_storage_root) / storage_key
+    if stored_path.exists():
+        return stored_path
+    return None
+
+
+def _paper_record_from_claim_rows(paper_row, claim_rows: list[dict]) -> dict:
+    return {
+        "paper_id": paper_row["id"],
+        "title": paper_row["title"],
+        "authors": paper_row.get("authors") or [],
+        "year": paper_row.get("publication_year"),
+        "source_filename": paper_row.get("source_filename"),
+        "claims": [
+            {
+                "claim_id": row["id"],
+                "claim": row["text"],
+                "claim_type": row.get("claim_type") or "descriptive",
+                "evidence_type": "other",
+                "evidence_strength": "moderate",
+                "evidence_reasoning": "",
+                "key_variables": [],
+                "context": "",
+            }
+            for row in claim_rows
+        ],
+    }
+
+
+def _sync_paper_analysis(
+    connection,
+    workspace_id: str,
+    paper_id: str,
+    analyzed_paper: dict,
+    *,
+    refresh_claims: bool,
+) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE papers
+            SET title = %s,
+                authors = %s::jsonb,
+                publication_year = %s
+            WHERE workspace_id = %s AND id = %s
+            """,
+            (
+                analyzed_paper.get("title") or "Untitled paper",
+                json.dumps(analyzed_paper.get("authors", [])),
+                analyzed_paper.get("year"),
+                workspace_id,
+                paper_id,
+            ),
+        )
+
+        if not refresh_claims:
+            return
+
+        cursor.execute(
+            """
+            DELETE FROM claims
+            WHERE workspace_id = %s AND paper_id = %s
+            """,
+            (workspace_id, paper_id),
+        )
+        for claim in analyzed_paper.get("claims", []):
+            cursor.execute(
+                """
+                INSERT INTO claims (id, workspace_id, paper_id, text, claim_type)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
+                    claim.get("claim_id"),
+                    workspace_id,
+                    paper_id,
+                    claim.get("claim", "").strip(),
+                    claim.get("claim_type", "descriptive"),
+                ),
+            )
+
+
+def _should_refresh_claims(
+    existing_claim_rows: list[dict],
+    analyzed_paper: dict,
+) -> bool:
+    existing_ids = {row["id"] for row in existing_claim_rows}
+    analyzed_ids = {
+        claim.get("claim_id")
+        for claim in analyzed_paper.get("claims", [])
+        if claim.get("claim_id")
+    }
+    return existing_ids != analyzed_ids
+
+
+def _load_runtime_paper_record(
+    connection,
+    workspace_id: str,
+    paper_id: str,
+) -> dict:
+    paper_row = _load_paper_row(connection, workspace_id, paper_id)
+    if paper_row is None:
+        raise ResearchGraphError(f"Paper {paper_id} was not found in workspace {workspace_id}.")
+
+    claim_rows = _load_claim_rows(connection, workspace_id, paper_id)
+    cached_analysis = _load_cached_analysis(paper_row.get("source_sha256"))
+    if cached_analysis is not None:
+        _sync_paper_analysis(
+            connection,
+            workspace_id,
+            paper_id,
+            cached_analysis,
+            refresh_claims=_should_refresh_claims(claim_rows, cached_analysis),
+        )
+        return cached_analysis
+
+    stored_path = _stored_pdf_path(paper_row)
+    if stored_path is not None:
+        analyzed = analyze_pdf(
+            stored_path,
+            manifest=load_manifest(),
+            persist=True,
+            progress_callback=None,
+        )
+        _sync_paper_analysis(
+            connection,
+            workspace_id,
+            paper_id,
+            analyzed,
+            refresh_claims=_should_refresh_claims(claim_rows, analyzed),
+        )
+        return analyzed
+
+    if claim_rows:
+        return _paper_record_from_claim_rows(paper_row, claim_rows)
+
+    raise SourceArtifactUnavailableError(
+        f"Paper {paper_id} has no cached analysis, no stored source PDF, and no saved claims."
+    )
+
+
+def _replace_claim_relationships(
+    connection,
+    workspace_id: str,
+    source_paper_id: str,
+    target_paper_id: str,
+    relationships: list[dict],
+) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            DELETE FROM claim_relationships
+            WHERE workspace_id = %s
+              AND source_claim_id IN (
+                SELECT id FROM claims WHERE workspace_id = %s AND paper_id = %s
+              )
+              AND target_claim_id IN (
+                SELECT id FROM claims WHERE workspace_id = %s AND paper_id = %s
+              )
+            """,
+            (
+                workspace_id,
+                workspace_id,
+                source_paper_id,
+                workspace_id,
+                target_paper_id,
+            ),
+        )
+        for relationship in relationships:
+            cursor.execute(
+                """
+                INSERT INTO claim_relationships (
+                  id,
+                  workspace_id,
+                  source_claim_id,
+                  target_claim_id,
+                  relationship_type,
+                  strength,
+                  explanation,
+                  methodological_note
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    f"claim-rel-{uuid4().hex[:10]}",
+                    workspace_id,
+                    relationship.get("source_claim_id"),
+                    relationship.get("target_claim_id"),
+                    relationship.get("relationship"),
+                    relationship.get("relationship_strength"),
+                    relationship.get("explanation", "").strip(),
+                    relationship.get("methodological_note", "").strip(),
+                ),
+            )
+
+
+def _aggregate_visual_relationship(
+    source_paper_id: str,
+    target_paper_id: str,
+    source_paper: dict,
+    target_paper: dict,
+    relationships: list[dict],
+) -> dict | None:
+    aggregated = aggregate_paper_edges(
+        relationships,
+        {
+            source_paper_id: {"claims": source_paper.get("claims", [])},
+            target_paper_id: {"claims": target_paper.get("claims", [])},
+        },
+    )
+    return aggregated.get(tuple(sorted((source_paper_id, target_paper_id))))
+
+
 def process_next_batch_job() -> bool:
     with _connect() as connection:
         job = _claim_batch_job(connection)
@@ -509,10 +824,13 @@ def process_next_batch_job() -> bool:
         ingested = 0
         duplicates = 0
         missing_files = 0
+        analysis_failures = 0
         new_paper_ids: list[str] = []
+        analysis_manifest = load_manifest()
 
         for item in items:
             storage_key = item["storage_key"]
+            stored_path: Path | None = None
             if storage_key:
                 stored_path = Path(settings.upload_storage_root) / storage_key
                 if not stored_path.exists():
@@ -523,6 +841,14 @@ def process_next_batch_job() -> bool:
                         "Stored file missing from local upload storage; ingestion skipped.",
                     )
                     continue
+            if stored_path is None:
+                analysis_failures += 1
+                _update_batch_item_message(
+                    connection,
+                    item["id"],
+                    "Paper analysis failed: accepted item had no stored file reference.",
+                )
+                continue
 
             existing = _paper_exists(connection, workspace_id, item["sha256"])
             if existing is not None:
@@ -534,13 +860,41 @@ def process_next_batch_job() -> bool:
                 )
                 continue
 
-            paper_id = _insert_paper(connection, workspace_id, item)
+            try:
+                analyzed_paper = analyze_pdf(
+                    stored_path,
+                    manifest=analysis_manifest,
+                    persist=True,
+                    progress_callback=None,
+                )
+            except Exception as exc:
+                analysis_failures += 1
+                _update_batch_item_message(
+                    connection,
+                    item["id"],
+                    f"Paper analysis failed: {exc}",
+                )
+                continue
+
+            paper_id = _insert_paper(
+                connection,
+                workspace_id,
+                item,
+                analyzed_paper=analyzed_paper,
+            )
+            _sync_paper_analysis(
+                connection,
+                workspace_id,
+                paper_id,
+                analyzed_paper,
+                refresh_claims=True,
+            )
             ingested += 1
             new_paper_ids.append(paper_id)
             _update_batch_item_message(
                 connection,
                 item["id"],
-                f"Ingested into workspace as {paper_id}.",
+                f"Analyzed and ingested into workspace as {paper_id}.",
             )
 
         created_relationships = _create_pending_relationships(
@@ -560,6 +914,8 @@ def process_next_batch_job() -> bool:
             summary_bits.append(f"{duplicates} duplicate(s) skipped")
         if missing_files:
             summary_bits.append(f"{missing_files} stored file(s) missing")
+        if analysis_failures:
+            summary_bits.append(f"{analysis_failures} analysis failure(s)")
         if queued_pairwise_jobs:
             summary_bits.append(
                 f"{queued_pairwise_jobs} pairwise comparison job(s) queued"
@@ -628,22 +984,110 @@ def process_next_pairwise_job() -> bool:
             connection.commit()
             return True
 
-        relationship_type, visible_strength = _resolve_pairwise_relationship(
-            source_paper_id,
-            target_paper_id,
-        )
+        used_placeholder = False
+        relationship_type = "pending"
+        visible_strength = 1
+        comparison_label = ""
+        visual_edge: dict | None = None
+
+        try:
+            source_paper = _load_runtime_paper_record(
+                connection,
+                job["workspace_id"],
+                source_paper_id,
+            )
+            target_paper = _load_runtime_paper_record(
+                connection,
+                job["workspace_id"],
+                target_paper_id,
+            )
+            claim_relationships = compare_papers(source_paper, target_paper)
+            _replace_claim_relationships(
+                connection,
+                job["workspace_id"],
+                source_paper_id,
+                target_paper_id,
+                claim_relationships,
+            )
+            visual_edge = _aggregate_visual_relationship(
+                source_paper_id,
+                target_paper_id,
+                source_paper,
+                target_paper,
+                claim_relationships,
+            )
+            if visual_edge is not None:
+                relationship_type = visual_edge["dominant"]
+                visible_strength = min(max(int(visual_edge.get("total_weight", 1)), 1), 10)
+                comparison_label = (
+                    "Resolved pairwise comparison for "
+                    f"{relationship['source_title']} and {relationship['target_title']} "
+                    f"as {relationship_type} from {len(claim_relationships)} claim link(s)."
+                )
+            else:
+                comparison_label = (
+                    "Compared "
+                    f"{relationship['source_title']} and {relationship['target_title']} "
+                    "but found no visual paper-level relationship."
+                )
+        except SourceArtifactUnavailableError:
+            used_placeholder = True
+            relationship_type, visible_strength = _resolve_placeholder_pairwise_relationship(
+                source_paper_id,
+                target_paper_id,
+            )
+            comparison_label = (
+                "Resolved pairwise comparison for "
+                f"{relationship['source_title']} and {relationship['target_title']} "
+                "using the legacy placeholder path because one paper lacks source artifacts."
+            )
+        except (ResearchGraphError, ClaudeAPIError, Exception) as exc:
+            error_kind, retryable = _classify_pairwise_failure(exc)
+            _complete_job(
+                connection,
+                job["id"],
+                status="failed",
+                progress_label=(
+                    "Pairwise comparison failed "
+                    f"({error_kind}): {str(exc).strip() or 'unknown error'}"
+                ),
+                completed_steps=0,
+                total_steps=total_steps,
+            )
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE jobs
+                    SET retryable = %s
+                    WHERE id = %s
+                    """,
+                    (retryable, job["id"]),
+                )
+            if batch_id:
+                _refresh_batch_progress(connection, batch_id)
+            connection.commit()
+            return True
 
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                UPDATE paper_relationships
-                SET relationship_type = %s,
-                    status = 'ready',
-                    visible_strength = %s
-                WHERE id = %s
-                """,
-                (relationship_type, visible_strength, relationship_id),
-            )
+            if visual_edge is not None or used_placeholder:
+                cursor.execute(
+                    """
+                    UPDATE paper_relationships
+                    SET relationship_type = %s,
+                        status = 'ready',
+                        visible_strength = %s
+                    WHERE id = %s
+                    """,
+                    (relationship_type, visible_strength, relationship_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    DELETE FROM paper_relationships
+                    WHERE id = %s
+                    """,
+                    (relationship_id,),
+                )
 
         _refresh_paper_statuses(
             connection,
@@ -654,11 +1098,7 @@ def process_next_pairwise_job() -> bool:
             connection,
             job["id"],
             status="completed",
-            progress_label=(
-                "Resolved pairwise comparison for "
-                f"{relationship['source_title']} and {relationship['target_title']} "
-                f"as {relationship_type}."
-            ),
+            progress_label=comparison_label,
             completed_steps=total_steps,
             total_steps=total_steps,
         )
@@ -705,9 +1145,10 @@ def main() -> None:
                     "service": "hypatia-worker",
                     "job_types": SUPPORTED_JOB_TYPES,
                     "notes": (
-                        "This service executes batch ingestion and placeholder "
-                        "pairwise comparison jobs now, with graph rebuild and "
-                        "replication tasks still to follow."
+                        "This service executes real batch ingestion and pairwise "
+                        "comparison jobs when source PDFs and Anthropic access are "
+                        "available, with a narrow placeholder fallback for legacy "
+                        "papers that lack source artifacts."
                     ),
                     "database_url": settings.database_url,
                     "upload_storage_root": settings.upload_storage_root,

@@ -48,7 +48,7 @@ The Python background worker. This will own:
 1. Add auth and workspace identity to the web and API layers.
 2. Introduce Postgres models for workspaces, papers, claims, relationships, and jobs.
 3. Add object-storage-backed upload ingestion for PDFs and ZIPs.
-4. Replace the placeholder pairwise resolver with the real comparison engine.
+4. Persist the full paper-analysis outputs in V2 storage instead of leaning on the prototype cache.
 5. Recreate the current graph and knowledge-panel flows against API data.
 
 ## Current API scaffold
@@ -140,22 +140,32 @@ Supporting files:
 - `services/api/.env.example`, `services/worker/.env.example`, and `apps/web/.env.example` show the expected local environment variables
 - accepted uploaded files are stored under `data/v2-uploads/` by the local upload storage backend
 
+The worker now also expects:
+
+- `ANTHROPIC_API_KEY`
+- optional `RG_PAPER_ANALYSIS_MODEL`
+- optional `RG_RELATIONSHIP_MODEL`
+
 The worker now processes queued `batch_ingestion` jobs by:
 
 - reading accepted files from local upload storage
-- creating new `papers` rows automatically
+- running the prototype paper-analysis pipeline against uploaded PDFs
+- creating new `papers` rows with analyzed metadata
 - skipping duplicate PDFs within the same workspace using file hashes
 - creating queued `pairwise_comparison` jobs for newly ingested paper pairs
 
 The worker also processes queued `pairwise_comparison` jobs by:
 
+- reusing the prototype pairwise comparison pipeline when source PDFs or cached analysis are available
+- writing claim-level relationships into the V2 database
 - resolving pending paper-relationship edges into ready graph edges
 - updating batch progress counts as comparisons finish
 - moving papers from `pairwise_pending` to `ready` when all of their current comparisons are resolved
 
-For now, pairwise resolution uses a deterministic placeholder heuristic so the
-durable job flow can be exercised before the true comparison pipeline is wired
-into V2.
+The only remaining placeholder path is a narrow legacy fallback: if a paper has
+no source artifact, no cached prototype analysis, and no stored claims yet, the
+worker still uses the old deterministic heuristic so seeded/demo records do not
+dead-end the graph entirely.
 
 For strict local stack testing, use:
 
