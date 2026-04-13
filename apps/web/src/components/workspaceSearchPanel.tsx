@@ -82,8 +82,8 @@ export function WorkspaceSearchPanel({ workspaceId }: WorkspaceSearchPanelProps)
     <div className="detail-card search-panel">
       <div className="detail-heading">Search the workspace</div>
       <p>
-        Ask for a topic, claim, or concept and Hypatia will rank the most relevant
-        extracted claims across your current corpus.
+        Ask for a topic, claim, or concept and Hypatia will hybrid-rank the most
+        relevant extracted claims across your current corpus.
       </p>
       <form className="search-form" onSubmit={handleSubmit}>
         <input
@@ -159,8 +159,8 @@ export function WorkspaceSearchPanel({ workspaceId }: WorkspaceSearchPanelProps)
         </div>
       ) : (
         <p className="panel-note">
-          Search works across extracted claim text, paper titles, evidence language, and
-          claim context from your uploaded papers.
+          Search works across extracted claim text, paper titles, evidence language,
+          claim context, and persisted claim vectors from your uploaded papers.
         </p>
       )}
     </div>

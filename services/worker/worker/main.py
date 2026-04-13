@@ -31,6 +31,7 @@ from research_graph.pipeline import (
     compare_papers,
 )
 from worker.config import settings
+from worker.search_index import build_claim_search_text, embed_text
 from worker.storage import get_upload_materializer
 
 
@@ -837,7 +838,17 @@ def _load_claim_rows(connection, workspace_id: str, paper_id: str) -> list[dict]
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            SELECT id, text, claim_type
+            SELECT
+              id,
+              text,
+              claim_type,
+              evidence_type,
+              evidence_strength,
+              evidence_reasoning,
+              key_variables,
+              context,
+              search_text,
+              search_embedding
             FROM claims
             WHERE workspace_id = %s AND paper_id = %s
             ORDER BY id ASC
@@ -906,11 +917,11 @@ def _paper_record_from_claim_rows(paper_row, claim_rows: list[dict]) -> dict:
                 "claim_id": row["id"],
                 "claim": row["text"],
                 "claim_type": row.get("claim_type") or "descriptive",
-                "evidence_type": "other",
-                "evidence_strength": "moderate",
-                "evidence_reasoning": "",
-                "key_variables": [],
-                "context": "",
+                "evidence_type": row.get("evidence_type") or "other",
+                "evidence_strength": row.get("evidence_strength") or "moderate",
+                "evidence_reasoning": row.get("evidence_reasoning") or "",
+                "key_variables": row.get("key_variables") or [],
+                "context": row.get("context") or "",
             }
             for row in claim_rows
         ],
@@ -925,6 +936,8 @@ def _sync_paper_analysis(
     *,
     refresh_claims: bool,
 ) -> None:
+    paper_title = analyzed_paper.get("title") or "Untitled paper"
+    paper_authors = analyzed_paper.get("authors", [])
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -936,8 +949,8 @@ def _sync_paper_analysis(
             WHERE workspace_id = %s AND id = %s
             """,
             (
-                analyzed_paper.get("title") or "Untitled paper",
-                json.dumps(analyzed_paper.get("authors", [])),
+                paper_title,
+                json.dumps(paper_authors),
                 analyzed_paper.get("year"),
                 json.dumps(analyzed_paper),
                 workspace_id,
@@ -956,10 +969,25 @@ def _sync_paper_analysis(
             (workspace_id, paper_id),
         )
         for claim in analyzed_paper.get("claims", []):
+            key_variables = claim.get("key_variables") or []
+            search_text = build_claim_search_text(
+                paper_title=paper_title,
+                paper_authors=paper_authors,
+                claim=claim,
+            )
+            search_embedding = embed_text(search_text)
             cursor.execute(
                 """
-                INSERT INTO claims (id, workspace_id, paper_id, text, claim_type)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO claims (
+                  id, workspace_id, paper_id, text, claim_type,
+                  evidence_type, evidence_strength, evidence_reasoning,
+                  key_variables, context, search_text, search_embedding
+                )
+                VALUES (
+                  %s, %s, %s, %s, %s,
+                  %s, %s, %s,
+                  %s::jsonb, %s, %s, %s::jsonb
+                )
                 """,
                 (
                     claim.get("claim_id"),
@@ -967,6 +995,13 @@ def _sync_paper_analysis(
                     paper_id,
                     claim.get("claim", "").strip(),
                     claim.get("claim_type", "descriptive"),
+                    claim.get("evidence_type", "other"),
+                    claim.get("evidence_strength", "moderate"),
+                    claim.get("evidence_reasoning", ""),
+                    json.dumps(key_variables),
+                    claim.get("context", ""),
+                    search_text,
+                    json.dumps(search_embedding),
                 ),
             )
 
@@ -981,7 +1016,12 @@ def _should_refresh_claims(
         for claim in analyzed_paper.get("claims", [])
         if claim.get("claim_id")
     }
-    return existing_ids != analyzed_ids
+    if existing_ids != analyzed_ids:
+        return True
+    return any(
+        not row.get("search_text") or not (row.get("search_embedding") or [])
+        for row in existing_claim_rows
+    )
 
 
 def _load_runtime_paper_record(

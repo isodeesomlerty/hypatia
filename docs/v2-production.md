@@ -81,8 +81,8 @@ The V2 workspace now also includes a first search surface:
 - researchers can search across persisted claim text, titles, evidence labels,
   and claim context within a private workspace
 - search results deep-link back into paper detail views in the knowledge panel
-- this currently uses local ranking over persisted workspace content rather than
-  a dedicated vector index or external search service
+- this currently uses hybrid lexical + local vector ranking over persisted
+  workspace content rather than a dedicated external search service
 
 For auth, the branch now has a viewer-aware contract end to end:
 
@@ -151,6 +151,13 @@ That schema covers:
 The `papers` table now also stores the full analyzed paper payload so the worker
 can reload real metadata and claims from V2 storage without depending on the
 prototype cache for newly ingested PDFs.
+
+The `claims` table now stores richer search metadata as well:
+
+- evidence and context fields needed for retrieval
+- a durable `search_text` projection for lexical search
+- a persisted local embedding vector so hybrid ranking does not need to
+  reconstruct every claim representation from scratch
 
 ## Local development bootstrap
 

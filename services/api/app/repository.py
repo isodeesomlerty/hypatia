@@ -947,7 +947,15 @@ class PostgresWorkspaceRepository:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT id, text, claim_type
+                SELECT
+                  id,
+                  text,
+                  claim_type,
+                  evidence_type,
+                  evidence_strength,
+                  evidence_reasoning,
+                  key_variables,
+                  context
                 FROM claims
                 WHERE workspace_id = %s AND paper_id = %s
                 ORDER BY id ASC
@@ -971,6 +979,11 @@ class PostgresWorkspaceRepository:
                     claim_id=claim_row["id"],
                     text=claim_row["text"],
                     claim_type=claim_row.get("claim_type") or "descriptive",
+                    evidence_type=claim_row.get("evidence_type") or "other",
+                    evidence_strength=claim_row.get("evidence_strength") or "moderate",
+                    evidence_reasoning=claim_row.get("evidence_reasoning") or "",
+                    key_variables=_coerce_str_list(claim_row.get("key_variables")),
+                    context=claim_row.get("context") or "",
                 )
                 for claim_row in self._claim_rows_for_paper(connection, row["workspace_id"], row["id"])
             ]
@@ -994,25 +1007,59 @@ class PostgresWorkspaceRepository:
             cursor.execute(
                 """
                 SELECT
-                  id,
-                  workspace_id,
-                  title,
-                  authors,
-                  publication_year,
-                  status,
-                  source_filename,
-                  analysis_payload
-                FROM papers
-                WHERE workspace_id = %s
-                ORDER BY publication_year DESC NULLS LAST, title ASC
+                  paper.id AS paper_id,
+                  paper.title,
+                  paper.authors,
+                  paper.publication_year,
+                  claim.id AS claim_id,
+                  claim.text,
+                  claim.claim_type,
+                  claim.evidence_type,
+                  claim.evidence_strength,
+                  claim.evidence_reasoning,
+                  claim.key_variables,
+                  claim.context,
+                  claim.search_text,
+                  claim.search_embedding
+                FROM papers AS paper
+                LEFT JOIN claims AS claim
+                  ON claim.workspace_id = paper.workspace_id
+                 AND claim.paper_id = paper.id
+                WHERE paper.workspace_id = %s
+                ORDER BY paper.publication_year DESC NULLS LAST, paper.title ASC, claim.id ASC
                 """,
                 (workspace_id,),
             )
             rows = cursor.fetchall()
-        return [
-            _search_paper_from_detail(self._paper_detail_from_row(connection, row))
-            for row in rows
-        ]
+        papers: dict[str, dict] = {}
+        for row in rows:
+            paper_id = row["paper_id"]
+            paper = papers.setdefault(
+                paper_id,
+                {
+                    "paper_id": paper_id,
+                    "title": row["title"],
+                    "authors": _coerce_str_list(row.get("authors")),
+                    "year": row.get("publication_year"),
+                    "claims": [],
+                },
+            )
+            if row.get("claim_id"):
+                paper["claims"].append(
+                    {
+                        "claim_id": row["claim_id"],
+                        "claim": row.get("text", ""),
+                        "claim_type": row.get("claim_type") or "descriptive",
+                        "evidence_type": row.get("evidence_type") or "other",
+                        "evidence_strength": row.get("evidence_strength") or "moderate",
+                        "evidence_reasoning": row.get("evidence_reasoning") or "",
+                        "key_variables": _coerce_str_list(row.get("key_variables")),
+                        "context": row.get("context") or "",
+                        "search_text": row.get("search_text") or "",
+                        "search_embedding": row.get("search_embedding") or [],
+                    }
+                )
+        return list(papers.values())
 
     def _claim_relationships_for_pair(
         self,

@@ -89,7 +89,14 @@ CREATE TABLE IF NOT EXISTS claims (
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
   text TEXT NOT NULL,
-  claim_type TEXT
+  claim_type TEXT,
+  evidence_type TEXT,
+  evidence_strength TEXT,
+  evidence_reasoning TEXT,
+  key_variables JSONB NOT NULL DEFAULT '[]'::jsonb,
+  context TEXT NOT NULL DEFAULT '',
+  search_text TEXT NOT NULL DEFAULT '',
+  search_embedding JSONB NOT NULL DEFAULT '[]'::jsonb
 );
 
 CREATE TABLE IF NOT EXISTS claim_relationships (
@@ -110,3 +117,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_workspace_sha256
 CREATE INDEX IF NOT EXISTS idx_jobs_workspace_id ON jobs(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_upload_batches_workspace_id ON upload_batches(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_paper_relationships_workspace_id ON paper_relationships(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_claims_workspace_id ON claims(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_claims_workspace_paper_id ON claims(workspace_id, paper_id);
+CREATE INDEX IF NOT EXISTS idx_claims_search_text
+  ON claims USING GIN (to_tsvector('simple', search_text));

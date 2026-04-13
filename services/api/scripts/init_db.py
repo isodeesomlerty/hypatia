@@ -104,9 +104,69 @@ def apply_schema(connection) -> None:
         )
         cursor.execute(
             """
+            ALTER TABLE claims
+            ADD COLUMN IF NOT EXISTS evidence_type TEXT
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE claims
+            ADD COLUMN IF NOT EXISTS evidence_strength TEXT
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE claims
+            ADD COLUMN IF NOT EXISTS evidence_reasoning TEXT
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE claims
+            ADD COLUMN IF NOT EXISTS key_variables JSONB NOT NULL DEFAULT '[]'::jsonb
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE claims
+            ADD COLUMN IF NOT EXISTS context TEXT NOT NULL DEFAULT ''
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE claims
+            ADD COLUMN IF NOT EXISTS search_text TEXT NOT NULL DEFAULT ''
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE claims
+            ADD COLUMN IF NOT EXISTS search_embedding JSONB NOT NULL DEFAULT '[]'::jsonb
+            """
+        )
+        cursor.execute(
+            """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_workspace_sha256
             ON papers(workspace_id, source_sha256)
             WHERE source_sha256 IS NOT NULL
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_claims_workspace_id
+            ON claims(workspace_id)
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_claims_workspace_paper_id
+            ON claims(workspace_id, paper_id)
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_claims_search_text
+            ON claims USING GIN (to_tsvector('simple', search_text))
             """
         )
 
