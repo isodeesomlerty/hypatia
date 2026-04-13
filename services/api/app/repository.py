@@ -412,15 +412,17 @@ class InMemoryWorkspaceRepository:
         for index, item in enumerate(request.items):
             filename = item.filename.lower()
             if request.source_kind == UploadSourceKind.PDF_BATCH:
-                is_valid = filename.endswith(".pdf")
-                message = (
+                is_valid = filename.endswith(".pdf") and item.validation_error is None
+                message = item.validation_error or (
                     "Queued for PDF ingestion."
                     if is_valid
                     else "Rejected. Only PDF files are accepted in batch PDF mode."
                 )
             else:
-                is_valid = index == 0 and filename.endswith(".zip")
-                message = (
+                is_valid = (
+                    index == 0 and filename.endswith(".zip") and item.validation_error is None
+                )
+                message = item.validation_error or (
                     "Archive queued for expansion and de-duplication."
                     if is_valid
                     else "Rejected. ZIP import mode expects a single .zip archive."
@@ -872,19 +874,24 @@ class PostgresWorkspaceRepository:
             accepted_items = 0
             rejected_items = 0
             results: list[UploadItemResult] = []
+            item_metadata = {
+                (item.filename, item.media_type, item.size_bytes): item for item in request.items
+            }
 
             for index, item in enumerate(request.items):
                 filename = item.filename.lower()
                 if request.source_kind == UploadSourceKind.PDF_BATCH:
-                    is_valid = filename.endswith(".pdf")
-                    message = (
+                    is_valid = filename.endswith(".pdf") and item.validation_error is None
+                    message = item.validation_error or (
                         "Queued for PDF ingestion."
                         if is_valid
                         else "Rejected. Only PDF files are accepted in batch PDF mode."
                     )
                 else:
-                    is_valid = index == 0 and filename.endswith(".zip")
-                    message = (
+                    is_valid = (
+                        index == 0 and filename.endswith(".zip") and item.validation_error is None
+                    )
+                    message = item.validation_error or (
                         "Archive queued for expansion and de-duplication."
                         if is_valid
                         else "Rejected. ZIP import mode expects a single .zip archive."
@@ -965,17 +972,24 @@ class PostgresWorkspaceRepository:
                     ),
                 )
                 for result in results:
+                    metadata = item_metadata.get(
+                        (result.filename, result.media_type, result.size_bytes)
+                    )
                     cursor.execute(
                         """
                         INSERT INTO upload_batch_items (
-                          batch_id, filename, media_type, size_bytes, status, message
-                        ) VALUES (%s, %s, %s, %s, %s, %s)
+                          batch_id, filename, media_type, size_bytes,
+                          storage_backend, storage_key, sha256, status, message
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             batch_id,
                             result.filename,
                             result.media_type,
                             result.size_bytes,
+                            metadata.storage_backend if metadata else None,
+                            metadata.storage_key if metadata else None,
+                            metadata.sha256 if metadata else None,
                             result.status,
                             result.message,
                         ),
@@ -1000,6 +1014,7 @@ class PostgresWorkspaceRepository:
             items=results,
         )
         return UploadBatchCreateResponse(batch=batch, job=job)
+
 
 def get_repository_info() -> RepositoryInfo:
     return _select_repository()[1]

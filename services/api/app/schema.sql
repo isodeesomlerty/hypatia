@@ -72,6 +72,9 @@ CREATE TABLE IF NOT EXISTS upload_batch_items (
   filename TEXT NOT NULL,
   media_type TEXT,
   size_bytes BIGINT,
+  storage_backend TEXT,
+  storage_key TEXT,
+  sha256 TEXT,
   status TEXT NOT NULL,
   message TEXT NOT NULL
 );

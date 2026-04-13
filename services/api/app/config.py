@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,10 @@ class APISettings:
     storage_backend: str = os.getenv("HYPATIA_STORAGE_BACKEND", "auto")
     allow_demo_fallback: bool = os.getenv("HYPATIA_ALLOW_DEMO_FALLBACK", "1") != "0"
     allow_dev_auth: bool = os.getenv("HYPATIA_ALLOW_DEV_AUTH", "1") != "0"
+    upload_storage_backend: str = os.getenv("HYPATIA_UPLOAD_STORAGE_BACKEND", "local")
+    upload_storage_root: str = str(
+        Path(os.getenv("HYPATIA_UPLOAD_STORAGE_ROOT", "data/v2-uploads")).resolve()
+    )
 
 
 settings = APISettings()

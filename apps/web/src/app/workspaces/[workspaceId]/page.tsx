@@ -1,5 +1,6 @@
 import { AuthControls } from "../../../components/authControls";
 import { ResearchGraph } from "../../../components/researchGraph";
+import { UploadBatchPanel } from "../../../components/uploadBatchPanel";
 import { getWorkspaceBundle } from "../../../lib/api";
 import { uploadModes, visibleLayers } from "../../../lib/demoWorkspace";
 import { getViewerRequestHeaders } from "../../../lib/viewer";
@@ -72,10 +73,6 @@ export default async function WorkspacePage({ params }: WorkspacePageProps) {
         </div>
         <div className="workspace-actions">
           <AuthControls compact />
-          <button type="button">Upload PDF batch</button>
-          <button type="button" className="secondary-button">
-            Import ZIP archive
-          </button>
         </div>
       </section>
 
@@ -91,7 +88,8 @@ export default async function WorkspacePage({ params }: WorkspacePageProps) {
       <section className="ingestion-grid">
         <article className="workspace-panel">
           <div className="section-label">Bulk corpus ingestion</div>
-          <div className="option-grid">
+          <UploadBatchPanel workspaceId={workspaceId} />
+          <div className="option-grid option-grid--supporting">
             {uploadModes.map((mode) => (
               <div className="option-card" key={mode.title}>
                 <div className="detail-heading">{mode.title}</div>

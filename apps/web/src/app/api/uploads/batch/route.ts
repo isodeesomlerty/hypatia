@@ -1,0 +1,29 @@
+import { NextResponse } from "next/server";
+
+import { getApiBaseUrl } from "../../../../lib/apiBaseUrl";
+import { getViewerRequestHeaders } from "../../../../lib/viewer";
+
+export async function POST(request: Request) {
+  try {
+    const formData = await request.formData();
+    const authHeaders = await getViewerRequestHeaders();
+    const response = await fetch(`${getApiBaseUrl()}/v1/uploads/batch-files`, {
+      method: "POST",
+      body: formData,
+      headers: authHeaders,
+    });
+    const responseText = await response.text();
+    return new NextResponse(responseText, {
+      status: response.status,
+      headers: {
+        "content-type": response.headers.get("content-type") ?? "application/json",
+      },
+    });
+  } catch (error) {
+    const detail =
+      error instanceof Error
+        ? error.message
+        : "Hypatia V2 could not reach the upload API.";
+    return NextResponse.json({ detail }, { status: 502 });
+  }
+}

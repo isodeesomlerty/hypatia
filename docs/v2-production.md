@@ -62,6 +62,7 @@ The production API now exposes the first batch-ingestion-facing contracts:
 - `GET /v1/workspaces/{workspace_id}/jobs`
 - `GET /v1/workspaces/{workspace_id}/batches`
 - `POST /v1/uploads/batch`
+- `POST /v1/uploads/batch-files`
 - `GET /v1/uploads/batch/{batch_id}`
 - `GET /v1/jobs/{job_id}`
 
@@ -135,6 +136,7 @@ Supporting files:
 - `compose.v2.yml` starts the local Postgres container
 - `services/api/scripts/init_db.py` applies `schema.sql`
 - `services/api/.env.example` and `apps/web/.env.example` show the expected local environment variables
+- accepted uploaded files are stored under `data/v2-uploads/` by the local upload storage backend
 
 For strict local stack testing, use:
 

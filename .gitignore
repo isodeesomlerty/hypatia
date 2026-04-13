@@ -18,5 +18,6 @@ coverage/
 
 data/cache/
 data/raw/
+data/v2-uploads/
 
 app/static/

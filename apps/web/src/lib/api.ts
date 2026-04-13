@@ -1,4 +1,5 @@
 import { buildDemoMeta, buildDemoWorkspaceBundle } from "./demoWorkspace";
+import { getApiBaseUrl } from "./apiBaseUrl";
 import type {
   APIMetaResponse,
   ViewerSummary,
@@ -10,14 +11,6 @@ import type {
   WorkspaceSummary,
 } from "./types";
 import { buildDemoViewer, type ViewerRequestHeaders } from "./viewer";
-
-function getApiBaseUrl() {
-  return (
-    process.env.HYPATIA_API_BASE_URL ||
-    process.env.NEXT_PUBLIC_HYPATIA_API_BASE_URL ||
-    "http://127.0.0.1:8000"
-  );
-}
 
 function demoFallbackEnabled() {
   return process.env.HYPATIA_ENABLE_DEMO_FALLBACK === "1";

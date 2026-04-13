@@ -126,6 +126,10 @@ class UploadItemInput(BaseModel):
     filename: str
     media_type: str | None = None
     size_bytes: int | None = None
+    storage_backend: str | None = None
+    storage_key: str | None = None
+    sha256: str | None = None
+    validation_error: str | None = None
 
 
 class UploadItemResult(BaseModel):
