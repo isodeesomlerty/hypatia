@@ -1,16 +1,36 @@
 # Hypatia
 
-Hypatia is a local-first Streamlit app for exploring academic papers as a paper-level knowledge graph. It extracts claims, grades methodological health, links papers that support or contradict each other, and supports natural-language search across the claim corpus.
+Hypatia turns a body of research into a living map of claims, evidence, and contradictions.
 
-## What This Repo Includes
+Instead of reading papers one by one and manually stitching together where the literature agrees, conflicts, or narrows a result, Hypatia extracts substantive claims, assesses methodological health, and maps paper relationships in an interactive research graph. It is designed to make the research landscape legible at a glance and explorable in depth.
 
-- A Streamlit app with an interactive `vis-network` graph
-- A Claude-first PDF ingestion pipeline with local PDF parsing fallback
-- Incremental preprocessing and JSON cache generation
-- Paper-level drilldown for methodology checks, claims, and cross-paper relationships
-- Search with a Sonnet primary path and a deterministic local fallback
+**Live demo:** [hypatia.streamlit.app](https://hypatia.streamlit.app/)
 
-## Quick Start
+**Display note:** For the best visual experience, open the app in light mode.
+
+## Why Hypatia
+
+One of the biggest bottlenecks in scientific discovery sits upstream of any single breakthrough: the literature itself. On important questions, there are too many papers, too many conflicting conclusions, and too many methodological differences buried in details that few people have time to untangle. Hypatia is an attempt to make that research landscape visible, so users can move from isolated papers to a clearer view of the field as a whole.
+
+## What It Does
+
+- Extracts substantive claims from academic papers
+- Evaluates methodological health and surfaces caution flags
+- Compares papers and identifies supports, contradictions, qualifications, and extensions
+- Maps the corpus as an interactive research map
+- Supports natural-language search across the research map
+
+## Try It
+
+The fastest way to experience Hypatia is through the live app:
+
+- [Live demo](https://hypatia.streamlit.app/)
+- Use light mode for the intended visual presentation
+- Explore the graph, then click papers or paper relationships to inspect claims, methodology, and cross-paper links
+
+The hosted app is best treated as a public demo surface. Some workflows depend on API-backed processing and may be constrained by deployment settings, available corpus data, or Anthropic rate limits.
+
+## Run Locally
 
 1. Create a virtual environment and install dependencies:
 
@@ -34,21 +54,36 @@ cp .env.example .env
 python scripts/preprocess_corpus.py
 ```
 
-If you already have cached paper JSONs in `data/cache/papers/` and want to register any orphaned ones,
-compute the missing pairwise relationships, and rebuild the graph snapshots:
-
-```bash
-make refresh
-```
-
 5. Launch the app:
 
 ```bash
 streamlit run app.py
 ```
 
-## Notes
+Optional: if you already have cached paper JSON files and want to rebuild registrations, missing pairwise relationships, and graph snapshots:
 
-- The preprocessed cache is written to `data/cache/`.
-- Live upload uses the same analysis path as offline preprocessing, but only for one paper at a time.
-- Password-protected, oversized, or overly long PDFs are rejected with a clear error instead of being processed unreliably.
+```bash
+make refresh
+```
+
+## How It Works
+
+- A Streamlit frontend renders the research map, search flow, and paper / relationship detail panels.
+- A Claude-first pipeline analyzes PDFs, extracts claims, scores methodological health, and compares papers pairwise.
+- Cached paper and relationship artifacts are stored locally as JSON so the graph can be rebuilt incrementally and explored without reprocessing everything on each run.
+
+## Current Limitations
+
+- Dark mode is not visually tuned yet; the app is designed for light mode.
+- Hosted deployments may rely on a smaller or demo corpus unless data is explicitly bundled or loaded externally.
+- LLM-backed ingestion, search, and pairwise comparison depend on Anthropic availability, deployment secrets, and API limits.
+
+## Roadmap
+
+- Stronger hosted deployment and persistent corpus support
+- Better export and report-generation workflows
+- Larger-scale corpus ingestion and management
+- Richer paper-relationship explanation and graph filtering
+- Researcher-facing collaboration and review features
+
+Built during the Anthropic hackathon and continued as an ongoing research-intelligence project.
