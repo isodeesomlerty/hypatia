@@ -220,3 +220,10 @@ export type WorkspaceBundle = {
   jobs: WorkspaceJobListResponse;
   batches: WorkspaceBatchListResponse;
 };
+
+export type WorkspaceSnapshot = {
+  workspace: WorkspaceBundle;
+  selectedPaper: PaperDetailResponse | null;
+  selectedRelationship: PaperRelationshipDetailResponse | null;
+  polled_at: string;
+};

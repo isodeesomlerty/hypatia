@@ -15,6 +15,7 @@ import type {
   WorkspaceGraphResponse,
   WorkspaceJobListResponse,
   WorkspacePaperListResponse,
+  WorkspaceSnapshot,
   WorkspaceSummary,
 } from "./types";
 import { buildDemoViewer, type ViewerRequestHeaders } from "./viewer";
@@ -79,6 +80,36 @@ export async function getWorkspaceBundle(
       viewer: buildDemoViewer(),
     };
   }
+}
+
+export async function getWorkspaceSnapshot(
+  workspaceId: string,
+  authHeaders: ViewerRequestHeaders,
+  options?: {
+    paperId?: string | null;
+    relationshipId?: string | null;
+  },
+): Promise<WorkspaceSnapshot> {
+  const selectedPaperId = options?.paperId ?? null;
+  const selectedRelationshipId = options?.relationshipId ?? null;
+  const workspace = await getWorkspaceBundle(workspaceId, authHeaders);
+  const [selectedPaperResult, selectedRelationshipResult] = await Promise.allSettled([
+    selectedPaperId ? getPaperDetail(workspaceId, selectedPaperId, authHeaders) : Promise.resolve(null),
+    selectedRelationshipId
+      ? getPaperRelationshipDetail(workspaceId, selectedRelationshipId, authHeaders)
+      : Promise.resolve(null),
+  ]);
+
+  return {
+    workspace,
+    selectedPaper:
+      selectedPaperResult.status === "fulfilled" ? selectedPaperResult.value : null,
+    selectedRelationship:
+      selectedRelationshipResult.status === "fulfilled"
+        ? selectedRelationshipResult.value
+        : null,
+    polled_at: new Date().toISOString(),
+  };
 }
 
 export async function getPaperDetail(

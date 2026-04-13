@@ -196,6 +196,11 @@ a {
   color: var(--accent);
 }
 
+.viewer-chip--live {
+  background: rgba(124, 119, 99, 0.14);
+  color: var(--stone);
+}
+
 .viewer-meta {
   color: var(--muted);
   font-size: 0.95rem;
