@@ -10,7 +10,7 @@ Instead of reading papers one by one and manually stitching together where the l
 
 ## Why Hypatia
 
-One of the biggest bottlenecks in scientific discovery sits upstream of any single breakthrough: the literature itself. On important questions, there are too many papers, too many conflicting conclusions, and too many methodological differences buried in details that few people have time to untangle. Hypatia is an attempt to make that research landscape visible, so users can move from isolated papers to a clearer view of the field as a whole.
+One of the biggest bottlenecks in scientific discovery sits upstream of any single breakthrough: the literature itself. On important questions, there are too many papers, too many conflicting conclusions, and too many methodological differences buried in details that few people have time to untangle. Hypatia is an attempt to make that research landscape visible, so users can move from isolated papers to a clearer view of the field as a whole. The name is a nod to Hypatia of Alexandria: a symbol of scholarship, inquiry, and the pursuit of knowledge across disciplines.
 
 ## What It Does
 
@@ -26,9 +26,10 @@ The fastest way to experience Hypatia is through the live app:
 
 - [Live demo](https://hypatia.streamlit.app/)
 - Use light mode for the intended visual presentation
-- Explore the graph, then click papers or paper relationships to inspect claims, methodology, and cross-paper links
+- Upload academic papers in PDF form to build the research map
+- Explore the graph as papers are added, then click papers or paper relationships to inspect claims, methodology, and cross-paper links
 
-The hosted app is best treated as a public demo surface. Some workflows depend on API-backed processing and may be constrained by deployment settings, available corpus data, or Anthropic rate limits.
+The hosted app is best treated as a public demo surface. You can open it immediately, but meaningful use depends on adding a corpus of academic PDFs. Some workflows depend on API-backed processing and may be constrained by deployment settings or Anthropic rate limits.
 
 ## Run Locally
 
@@ -84,6 +85,7 @@ make refresh
 - Better export and report-generation workflows
 - Larger-scale corpus ingestion and management
 - Richer paper-relationship explanation and graph filtering
+- An agentic replication engine that attempts to reproduce, stress-test, or challenge the claims made by papers
 - Researcher-facing collaboration and review features
 
 Built during the Anthropic hackathon and continued as an ongoing research-intelligence project.
